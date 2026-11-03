@@ -141,7 +141,8 @@ export async function POST(req: Request) {
   if (meta.needSignature && !entry.signature) return fail(400, "Tanda tangan wajib diisi.");
 
   // Optimistic concurrency: attendees often submit at the same moment right after the QR is shown.
-  for (let attempt = 0; attempt < 8; attempt++) {
+  const deadline = Date.now() + 8000;
+  for (let attempt = 0; Date.now() < deadline; attempt++) {
     const cur = await readJson<{ entries: Entry[] }>(`att/${id}/list.json`);
     const entries = cur?.value?.entries ?? [];
     if (entries.length >= MAX_ENTRIES) return fail(429, "Daftar hadir sudah penuh.");
@@ -158,9 +159,8 @@ export async function POST(req: Request) {
       return reply(200, { ok: true, id: entry.id });
     } catch (e) {
       const conflict = e instanceof BlobPreconditionFailedError || /already exists|precondition/i.test(String((e as Error)?.message));
-      console.warn("attendance write conflict", attempt, (e as Error)?.name, (e as Error)?.message);
       if (!conflict) throw e;
-      await new Promise((r) => setTimeout(r, 80 + Math.random() * 220 * (attempt + 1)));
+      await new Promise((r) => setTimeout(r, 50 + Math.random() * 150 * Math.min(attempt + 1, 4)));
     }
   }
   return fail(503, "Server sedang sibuk. Coba kirim lagi.");

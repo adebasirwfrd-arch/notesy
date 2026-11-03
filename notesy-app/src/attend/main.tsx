@@ -36,6 +36,9 @@ const readLocal = <T,>(key: string): T | null => {
   }
 };
 
+/** Many attendees sign in at once right after the QR is shown; the server answers 503 when it could not keep up. */
+class BusyError extends Error {}
+
 async function api<T>(init?: RequestInit): Promise<T> {
   let res: Response;
   try {
@@ -44,6 +47,7 @@ async function api<T>(init?: RequestInit): Promise<T> {
     throw new Error("Tidak ada koneksi internet. Periksa sinyal lalu coba lagi.");
   }
   const body = (await res.json().catch(() => null)) as (T & { message?: string }) | null;
+  if (res.status === 503) throw new BusyError(body?.message ?? "Server sedang sibuk. Coba kirim lagi.");
   if (!res.ok) throw new Error(body?.message ?? `Gagal (${res.status}). Coba lagi.`);
   return body as T;
 }
@@ -107,7 +111,16 @@ function App() {
     setSending(true);
     try {
       const sig = signature ? await shrink(signature) : undefined;
-      await api({ method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...profile, signature: sig }) });
+      const body = JSON.stringify({ ...profile, signature: sig });
+      for (let attempt = 0; ; attempt++) {
+        try {
+          await api({ method: "POST", headers: { "Content-Type": "application/json" }, body });
+          break;
+        } catch (err) {
+          if (!(err instanceof BusyError) || attempt >= 4) throw err;
+          await new Promise((r) => setTimeout(r, 800 + Math.random() * 1600));
+        }
+      }
       localStorage.setItem(PROFILE_KEY, JSON.stringify(profile));
       const record = { name: profile.name.trim(), at: Date.now() };
       localStorage.setItem(doneKey, JSON.stringify(record));
