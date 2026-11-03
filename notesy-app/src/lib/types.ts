@@ -69,6 +69,22 @@ export interface Note {
   /** What happened to capture during recording (share ended, re-shared, stopped by user). */
   events?: { atMs: number; text: string }[];
   mom?: Mom;
+  /** Who Meet/Teams showed as speaking, from the Notesy extension. */
+  speakerTimeline?: SpeakerSpan[];
+  /** AI-tidied copy of the transcript with topic headings; the original stays in `transcript`. */
+  cleanTranscript?: CleanTranscript;
+}
+
+export interface SpeakerSpan {
+  startMs: number;
+  endMs: number;
+  name: string;
+}
+
+export interface CleanTranscript {
+  createdAt: number;
+  model?: string;
+  sections: { title: string; paragraphs: { speaker: string; start: number; text: string }[] }[];
 }
 
 /** A signature as a trimmed transparent PNG data URL, either drawn on screen or uploaded. */

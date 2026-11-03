@@ -14,7 +14,7 @@ const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 const manifest = JSON.parse(readFileSync(join(root, "extension/manifest.json"), "utf8"));
 manifest.version = pkg.version;
 writeFileSync(join(dist, "manifest.json"), JSON.stringify(manifest, null, 2));
-copyFileSync(join(root, "extension/background.js"), join(dist, "background.js"));
+for (const f of ["background.js", "meeting-speakers.js", "notesy-bridge.js"]) copyFileSync(join(root, "extension", f), join(dist, f));
 
 const zip = join(root, `notesy-extension-${pkg.version}.zip`);
 rmSync(zip, { force: true });

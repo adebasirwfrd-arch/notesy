@@ -242,6 +242,9 @@ a { color: inherit; }
 .ts { color: var(--faint); font-size: 12px; font-variant-numeric: tabular-nums; }
 .ts:hover { color: var(--text); text-decoration: underline; }
 .turn p { margin: 2px 0 0; font-size: 15px; line-height: 1.65; }
+.transcript .topic { font-size: 15px; font-weight: 650; margin: 22px 0 10px; padding-bottom: 4px; border-bottom: 1px solid var(--border, #e5e7eb); }
+.transcript section:first-child .topic { margin-top: 0; }
+.transcript-toolbar .btn-small svg { vertical-align: -2px; margin-right: 4px; }
 .seg { border-radius: 3px; outline: none; }
 .seg.active { background: rgba(250, 204, 21, 0.35); }
 .seg:focus { background: var(--panel); }

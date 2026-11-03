@@ -1,5 +1,13 @@
 import { paragraphs } from "./paragraphs";
-import { db, getBlob, listSlides, putBlob, putNote, putSlide, emit } from "./db";
+import {
+  db,
+  getBlob,
+  listSlides,
+  putBlob,
+  putNote,
+  putSlide,
+  emit,
+} from "./db";
 import { speakerName } from "./ai/prompts";
 import type { Note, Slide } from "./types";
 import { blobToBase64, formatClock, formatDate, formatTime } from "./util";
@@ -8,39 +16,85 @@ async function slideDataUrls(noteId: string) {
   const map = new Map<string, string>();
   for (const s of await listSlides(noteId)) {
     const b = await getBlob(s.blobKey);
-    if (b) map.set(s.id, `data:${b.type || "image/jpeg"};base64,${await blobToBase64(b)}`);
+    if (b)
+      map.set(
+        s.id,
+        `data:${b.type || "image/jpeg"};base64,${await blobToBase64(b)}`,
+      );
   }
   return map;
 }
 
 export function transcriptMarkdown(note: Note) {
+  if (note.cleanTranscript?.sections.length)
+    return note.cleanTranscript.sections
+      .map((sec) =>
+        [
+          sec.title ? `## ${sec.title}` : "",
+          ...sec.paragraphs.map(
+            (p) =>
+              `**${p.speaker}** [${formatClock(p.start * 1000)}]\n${p.text}`,
+          ),
+        ]
+          .filter(Boolean)
+          .join("\n\n"),
+      )
+      .join("\n\n");
   return paragraphs(note.transcript, (s) => speakerName(note, s))
-    .map((p) => `**${p.speaker}** [${formatClock(p.items[0].start * 1000)}]\n${p.items.map((s) => s.text).join(" ")}`)
+    .map(
+      (p) =>
+        `**${p.speaker}** [${formatClock(p.items[0].start * 1000)}]\n${p.items.map((s) => s.text).join(" ")}`,
+    )
     .join("\n\n");
 }
 
-export async function noteMarkdown(note: Note, opts: { inlineImages: boolean }) {
-  const summary = note.summaries.find((s) => s.id === note.activeSummaryId) ?? note.summaries.at(-1);
-  const images = opts.inlineImages ? await slideDataUrls(note.id) : new Map<string, string>();
-  const fix = (md: string) => md.replace(/\]\(slide:([\w-]+)\)/g, (m, id) => (images.has(id) ? `](${images.get(id)})` : m));
+export async function noteMarkdown(
+  note: Note,
+  opts: { inlineImages: boolean },
+) {
+  const summary =
+    note.summaries.find((s) => s.id === note.activeSummaryId) ??
+    note.summaries.at(-1);
+  const images = opts.inlineImages
+    ? await slideDataUrls(note.id)
+    : new Map<string, string>();
+  const fix = (md: string) =>
+    md.replace(/\]\(slide:([\w-]+)\)/g, (m, id) =>
+      images.has(id) ? `](${images.get(id)})` : m,
+    );
   const parts = [
     `# ${note.title}`,
     `${formatDate(note.createdAt)} · ${formatTime(note.startedAt ?? note.createdAt)} · ${formatClock(note.durationMs)}`,
   ];
   if (summary) parts.push("## Ringkasan", fix(summary.markdown));
   if (note.memo.trim()) parts.push("## Memo", fix(note.memo));
-  if (note.transcript.length) parts.push("## Transkrip", transcriptMarkdown(note));
+  if (note.transcript.length)
+    parts.push("## Transkrip", transcriptMarkdown(note));
   return parts.join("\n\n");
 }
 
-const escapeHtml = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
+const escapeHtml = (s: string) =>
+  s.replace(
+    /[&<>"]/g,
+    (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!,
+  );
 
 /** Self-contained HTML (images embedded) that prints cleanly to PDF. */
-export async function noteHtml(note: Note, renderedSummary: string, renderedMemo: string) {
+export async function noteHtml(
+  note: Note,
+  renderedSummary: string,
+  renderedMemo: string,
+) {
   const images = await slideDataUrls(note.id);
-  const fix = (html: string) => html.replace(/src="slide:([\w-]+)"/g, (m, id) => (images.has(id) ? `src="${images.get(id)}"` : m));
+  const fix = (html: string) =>
+    html.replace(/src="slide:([\w-]+)"/g, (m, id) =>
+      images.has(id) ? `src="${images.get(id)}"` : m,
+    );
   const transcript = note.transcript
-    .map((s) => `<p><b>${escapeHtml(speakerName(note, s))}</b> <span class="t">${formatClock(s.start * 1000)}</span> ${escapeHtml(s.text)}</p>`)
+    .map(
+      (s) =>
+        `<p><b>${escapeHtml(speakerName(note, s))}</b> <span class="t">${formatClock(s.start * 1000)}</span> ${escapeHtml(s.text)}</p>`,
+    )
     .join("");
   return `<!doctype html><html lang="id"><head><meta charset="utf-8"><title>${escapeHtml(note.title)}</title>
 <style>body{font:15px/1.6 system-ui,-apple-system,Segoe UI,sans-serif;max-width:820px;margin:40px auto;padding:0 24px;color:#1c1917}
@@ -71,31 +125,52 @@ export async function exportBackup(includeAudio: boolean) {
     const b = await getBlob(s.blobKey);
     if (b) slides.push({ ...s, data: await blobToBase64(b), mime: b.type });
   }
-  const backup: Backup = { app: "notesy", version: 1, exportedAt: Date.now(), notes, slides };
+  const backup: Backup = {
+    app: "notesy",
+    version: 1,
+    exportedAt: Date.now(),
+    notes,
+    slides,
+  };
   if (includeAudio) {
     backup.audio = [];
     for (const n of notes)
       for (const a of n.audio) {
         const b = await getBlob(a.blobKey);
-        if (b) backup.audio.push({ key: a.blobKey, data: await blobToBase64(b), mime: b.type });
+        if (b)
+          backup.audio.push({
+            key: a.blobKey,
+            data: await blobToBase64(b),
+            mime: b.type,
+          });
       }
   }
   return new Blob([JSON.stringify(backup)], { type: "application/json" });
 }
 
-const b64ToBlob = (data: string, mime: string) => new Blob([Uint8Array.from(atob(data), (c) => c.charCodeAt(0))], { type: mime });
+const b64ToBlob = (data: string, mime: string) =>
+  new Blob([Uint8Array.from(atob(data), (c) => c.charCodeAt(0))], {
+    type: mime,
+  });
 
 export async function importBackup(file: File) {
   const backup = JSON.parse(await file.text()) as Backup;
   if (backup.app !== "notesy") throw new Error("Bukan file cadangan Notesy.");
-  for (const a of backup.audio ?? []) await putBlob(a.key, b64ToBlob(a.data, a.mime));
+  for (const a of backup.audio ?? [])
+    await putBlob(a.key, b64ToBlob(a.data, a.mime));
   for (const s of backup.slides) {
     const { data, mime, ...slide } = s;
     await putSlide(slide, b64ToBlob(data, mime));
   }
   for (const n of backup.notes) {
-    const hasAudio = n.audio.every((a) => backup.audio?.some((x) => x.key === a.blobKey));
-    await putNote({ ...n, audio: hasAudio ? n.audio : [], status: { kind: "idle" } });
+    const hasAudio = n.audio.every((a) =>
+      backup.audio?.some((x) => x.key === a.blobKey),
+    );
+    await putNote({
+      ...n,
+      audio: hasAudio ? n.audio : [],
+      status: { kind: "idle" },
+    });
   }
   emit("notes");
   return backup.notes.length;

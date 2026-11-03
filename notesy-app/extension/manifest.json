@@ -3,30 +3,73 @@
   "name": "Notesy — Meeting Notes",
   "short_name": "Notesy",
   "version": "0.1.0",
-  "description": "Rekam rapat (layar + audio), transkrip lokal, slide otomatis, dan ringkasan AI lewat Cursor.",
+  "description": "Rekam rapat (layar + audio), transkrip, slide otomatis, nama pembicara dari Meet/Teams, dan ringkasan AI.",
   "minimum_chrome_version": "116",
   "action": {
     "default_title": "Buka Notesy",
-    "default_icon": { "16": "icons/icon-16.png", "32": "icons/icon-32.png", "48": "icons/icon-48.png" }
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png"
+    }
   },
-  "icons": { "16": "icons/icon-16.png", "32": "icons/icon-32.png", "48": "icons/icon-48.png", "128": "icons/icon-128.png" },
-  "background": { "service_worker": "background.js" },
-  "permissions": ["storage", "unlimitedStorage"],
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "permissions": [
+    "storage",
+    "unlimitedStorage"
+  ],
   "host_permissions": [
     "https://api.cursor.com/*",
     "https://notesy-three.vercel.app/*",
     "https://huggingface.co/*",
     "https://*.huggingface.co/*",
-    "https://*.hf.co/*"
+    "https://*.hf.co/*",
+    "http://localhost/*"
   ],
-  "optional_host_permissions": ["https://*/*"],
+  "optional_host_permissions": [
+    "https://*/*"
+  ],
   "commands": {
     "open-notesy": {
-      "suggested_key": { "default": "Alt+Shift+N" },
+      "suggested_key": {
+        "default": "Alt+Shift+N"
+      },
       "description": "Buka Notesy"
     }
   },
   "content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
-  }
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://meet.google.com/*",
+        "https://teams.microsoft.com/*",
+        "https://teams.live.com/*",
+        "https://teams.cloud.microsoft/*"
+      ],
+      "js": [
+        "meeting-speakers.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://notesy-three.vercel.app/*",
+        "http://localhost/*"
+      ],
+      "js": [
+        "notesy-bridge.js"
+      ],
+      "run_at": "document_start"
+    }
+  ]
 }
