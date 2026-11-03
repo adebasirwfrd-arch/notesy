@@ -25,6 +25,7 @@ export const DEFAULT_SETTINGS: Settings = {
   sttLanguage: "auto",
   whisperModel: "onnx-community/whisper-small",
   whisperDevice: "auto",
+  liveTranscribe: true,
   sttApiBase: "https://api.groq.com/openai/v1",
   sttApiKey: "",
   sttApiModel: "whisper-large-v3",

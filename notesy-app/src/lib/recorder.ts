@@ -94,6 +94,17 @@ export class MeetingRecorder {
   onSystemAudioLost?: () => void;
   onMicLost?: () => void;
   onMicRestored?: () => void;
+  /** A mic or participant audio stream started or stopped being recorded (start, reconnect, re-share). */
+  onAudioAttached?: (channel: Channel, stream: MediaStream) => void;
+  onAudioDetached?: (channel: Channel) => void;
+
+  /** Audio streams currently being recorded per channel. */
+  audioStreams(): { channel: Channel; stream: MediaStream }[] {
+    const out: { channel: Channel; stream: MediaStream }[] = [];
+    if (this.mic && this.micSource) out.push({ channel: "mic", stream: this.mic });
+    if (this.display && this.systemSource) out.push({ channel: "system", stream: new MediaStream(this.display.getAudioTracks()) });
+    return out;
+  }
 
   constructor(readonly opts: RecorderOptions) {}
 
@@ -182,6 +193,7 @@ export class MeetingRecorder {
     rec.start();
     if (this.state === "paused") rec.pause();
     this.micParts.push({ rec, offsetMs });
+    this.onAudioAttached?.("mic", stream);
   }
 
   /** The OS ends the mic track when a call grabs the device or a headset switches profile; reconnect until stop(). */
@@ -191,6 +203,7 @@ export class MeetingRecorder {
     this.micSource?.disconnect();
     this.micSource = null;
     delete this.analysers.mic;
+    this.onAudioDetached?.("mic");
     stream.getTracks().forEach((t) => t.stop());
     await this.micParts.at(-1)?.rec.stop();
     this.onMicLost?.();
@@ -247,6 +260,7 @@ export class MeetingRecorder {
     if (this.state === "recording" || this.state === "paused") rec.start();
     if (this.state === "paused") rec.pause();
     this.systemParts.push({ rec, offsetMs });
+    this.onAudioAttached?.("system", stream);
   }
 
   private async stopSystemPart() {
@@ -254,6 +268,7 @@ export class MeetingRecorder {
     this.systemSource.disconnect();
     this.systemSource = null;
     delete this.analysers.system;
+    this.onAudioDetached?.("system");
     await this.systemParts.at(-1)?.rec.stop();
   }
 

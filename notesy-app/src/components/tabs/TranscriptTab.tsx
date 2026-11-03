@@ -7,6 +7,7 @@ import { speakerName } from "../../lib/ai/prompts";
 import { transcriptMarkdown } from "../../lib/export";
 import { download, formatClock, safeFileName } from "../../lib/util";
 import { toast } from "../../lib/toast";
+import { useSettings } from "../../lib/settings";
 import type { Note, Segment } from "../../lib/types";
 
 const COLORS = ["#2563eb", "#db2777", "#059669", "#d97706", "#7c3aed", "#0891b2"];
@@ -18,6 +19,7 @@ export function TranscriptTab({ note, isLive }: { note: Note; isLive: boolean })
   const [time, setTime] = useState(0);
   const [q, setQ] = useState("");
   const [follow, setFollow] = useState(true);
+  const [settings] = useSettings();
   const listRef = useRef<HTMLDivElement>(null);
 
   const speakers = useMemo(() => [...new Set(note.transcript.map((s) => s.speaker))], [note.transcript]);
@@ -66,11 +68,15 @@ export function TranscriptTab({ note, isLive }: { note: Note; isLive: boolean })
       n.transcript = n.transcript.map((s) => (s.id === id ? { ...s, text } : s));
     });
 
-  if (isLive)
+  if (isLive && !note.transcript.length)
     return (
       <div className="empty-state">
         <FileAudio size={22} />
-        <p>Transkrip dibuat di perangkat ini setelah rekaman selesai, agar rapat tetap lancar tanpa membebani laptop.</p>
+        <p>
+          {settings.sttEngine === "browser" && settings.liveTranscribe
+            ? "Transkrip muncul di sini selama rapat berlangsung, beberapa detik setelah orang berbicara."
+            : "Transkrip dibuat setelah rekaman selesai."}
+        </p>
       </div>
     );
 
@@ -127,7 +133,7 @@ export function TranscriptTab({ note, isLive }: { note: Note; isLive: boolean })
                 className="icon-btn"
                 title="Transkrip ulang"
                 disabled={isProcessing(note.id)}
-                onClick={() => confirm("Transkrip ulang akan mengganti transkrip saat ini. Lanjutkan?") && processNote(note.id, { transcribe: true, summarize: false })}
+                onClick={() => confirm("Transkrip ulang akan mengganti transkrip saat ini. Lanjutkan?") && processNote(note.id, { transcribe: true, fresh: true, summarize: false })}
               >
                 <RefreshCw size={16} />
               </button>

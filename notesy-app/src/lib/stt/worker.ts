@@ -50,7 +50,7 @@ async function load({ model, device, ortBase }: LoadMsg) {
 async function run({ id, audio, language }: RunMsg) {
   if (!asr) throw new Error("model not loaded");
   const out = (await asr(audio, {
-    language: language ?? undefined,
+    language: language === "jv" ? "jw" : (language ?? undefined),
     task: "transcribe",
     return_timestamps: true,
   } as never)) as { text: string; chunks?: { timestamp: [number, number | null]; text: string }[] };

@@ -79,32 +79,63 @@ function vint(data: Uint8Array, pos: number) {
 
 export const hasWebmHeader = (data: Uint8Array) => indexOf(data.subarray(0, 4), EBML_MAGIC) === 0;
 
-/** Returns the repaired file and where in the recording its audio starts, or null when no cluster can be found. */
-export function repairHeaderlessWebm(data: Uint8Array): { bytes: Uint8Array; startSec: number } | null {
-  if (hasWebmHeader(data)) return null;
-  const at = indexOf(data, CLUSTER);
-  if (at < 0) return null;
+/** Timecode and first block's track of the cluster at `at`, or null when the bytes there are not a real cluster. */
+function readCluster(data: Uint8Array, at: number): { sec: number; track: number } | null {
   let pos = at + 4;
+  if (pos >= data.length) return null;
   pos += vint(data, pos).len;
-  let startSec = 0;
+  let sec: number | null = null;
   let track = 1;
   for (let guard = 0; guard < 4 && pos < data.length; guard++) {
     const id = data[pos];
     const size = vint(data, pos + 1);
     const body = pos + 1 + size.len;
     if (id === 0xe7) {
+      if (size.value > 8) return null;
       let t = 0;
       for (let i = 0; i < size.value; i++) t = t * 256 + data[body + i];
-      startSec = t / 1000;
+      sec = t / 1000;
     } else if (id === 0xa3) {
       track = vint(data, body).value;
       break;
     }
     pos = body + size.value;
   }
-  const head = header(track, 2);
+  return sec === null ? null : { sec, track };
+}
+
+export interface WebmIndex {
+  /** Bytes to put in front of any run of clusters: the file's own header, or a synthetic one when it was lost. */
+  header: Uint8Array;
+  clusters: { pos: number; sec: number }[];
+}
+
+/** MediaRecorder starts a cluster at least every ~32 s (SimpleBlock timecodes are 16-bit), so clusters make good cut points. */
+export function indexWebm(data: Uint8Array): WebmIndex | null {
+  const clusters: { pos: number; sec: number }[] = [];
+  let track = 1;
+  for (let at = indexOf(data, CLUSTER); at >= 0; at = indexOf(data, CLUSTER, at + 4)) {
+    const c = readCluster(data, at);
+    if (!c || (clusters.length && c.sec < clusters[clusters.length - 1].sec)) continue;
+    if (!clusters.length) track = c.track;
+    clusters.push({ pos: at, sec: c.sec });
+  }
+  if (!clusters.length) return null;
+  const header = hasWebmHeader(data) ? data.subarray(0, clusters[0].pos) : headerFor(track);
+  return { header, clusters };
+}
+
+const headerFor = (track: number) => header(track, 2);
+
+/** Returns the repaired file and where in the recording its audio starts, or null when no cluster can be found. */
+export function repairHeaderlessWebm(data: Uint8Array): { bytes: Uint8Array; startSec: number } | null {
+  if (hasWebmHeader(data)) return null;
+  const at = indexOf(data, CLUSTER);
+  if (at < 0) return null;
+  const c = readCluster(data, at);
+  const head = headerFor(c?.track ?? 1);
   const out = new Uint8Array(head.length + data.length - at);
   out.set(head, 0);
   out.set(data.subarray(at), head.length);
-  return { bytes: out, startSec };
+  return { bytes: out, startSec: c?.sec ?? 0 };
 }

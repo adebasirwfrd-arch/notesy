@@ -55,6 +55,10 @@ export interface Note {
   summaries: SummaryDoc[];
   activeSummaryId?: string;
   transcript: Segment[];
+  /** Meeting-time spans (seconds) per channel already transcribed, so interrupted work resumes instead of restarting. */
+  transcriptCoverage?: Partial<Record<Channel | "mix", [number, number][]>>;
+  /** False while transcription is partial; undefined on notes from before coverage existed. */
+  transcriptComplete?: boolean;
   speakerNames: Record<string, string>;
   audio: AudioTrack[];
   chat: ChatMessage[];
@@ -175,6 +179,8 @@ export interface Settings {
   sttLanguage: string;
   whisperModel: string;
   whisperDevice: "auto" | "webgpu" | "wasm";
+  /** Transcribe on the device while recording, instead of only after the meeting. */
+  liveTranscribe: boolean;
   sttApiBase: string;
   sttApiKey: string;
   sttApiModel: string;

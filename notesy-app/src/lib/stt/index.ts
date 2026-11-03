@@ -2,7 +2,8 @@ import { getBlob } from "../db";
 import { ensureHostPermission, assetUrl, hasWebGPU } from "../platform";
 import type { AudioTrack, Channel, DictionaryEntry, Segment, Settings } from "../types";
 import { uid } from "../util";
-import { decodeToMono16k, SAMPLE_RATE, speechWindows } from "./audio";
+import { decodePieces, SAMPLE_RATE, speechWindows } from "./audio";
+import { isCovered, uncovered, type Ranges } from "./coverage";
 import { repairHeaderlessWebm } from "./webm";
 
 export const WHISPER_MODELS = [
@@ -27,6 +28,21 @@ interface Chunk {
   text: string;
 }
 
+function withTimeout<T>(p: Promise<T>, ms: number, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  return Promise.race([
+    p,
+    new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(message)), ms);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
+type Device = "webgpu" | "wasm";
+
+/** ORT's WebGPU backend degrades after a few hundred runs (then fails or hangs); a fresh worker before that keeps it healthy. */
+const RECYCLE_AFTER = 120;
+
 class WhisperClient {
   private worker: Worker | null = null;
   private seq = 0;
@@ -34,6 +50,22 @@ class WhisperClient {
   private loading: Promise<string> | null = null;
   private loadedKey = "";
   private onDownload: ((loaded: number, total: number) => void) | null = null;
+  private model = "";
+  private preferred: Device = "wasm";
+  private calls = 0;
+  private queue: Promise<unknown> = Promise.resolve();
+
+  /** Loads the model on the device the user prefers; later recoveries return to that device when they can. */
+  async prepare(model: string, pref: Settings["whisperDevice"], onDownload?: (loaded: number, total: number) => void): Promise<string> {
+    const preferred = await this.resolveDevice(pref);
+    const next = this.queue.then(() => {
+      this.model = model;
+      this.preferred = preferred;
+      return this.load(model, preferred, onDownload);
+    });
+    this.queue = next.catch(() => {});
+    return next;
+  }
 
   private ensureWorker() {
     if (this.worker) return this.worker;
@@ -64,13 +96,15 @@ class WhisperClient {
     }
   }
 
-  load(model: string, device: "webgpu" | "wasm", onDownload?: (loaded: number, total: number) => void): Promise<string> {
+  load(model: string, device: Device, onDownload?: (loaded: number, total: number) => void): Promise<string> {
     const key = `${model}|${device}`;
     if (this.loadedKey === key) return Promise.resolve(device);
     if (this.loading) return this.loading;
+    if (this.loadedKey) this.reset();
+    this.model = model;
     const w = this.ensureWorker();
     this.onDownload = onDownload ?? null;
-    this.loading = new Promise<string>((resolve, reject) => {
+    const loading: Promise<string> = new Promise<string>((resolve, reject) => {
       const handler = (e: MessageEvent) => {
         if (e.data.type === "ready") {
           w.removeEventListener("message", handler);
@@ -84,18 +118,66 @@ class WhisperClient {
       w.addEventListener("message", handler);
       w.postMessage({ type: "load", model, device, ortBase: assetUrl("ort/") });
     }).finally(() => {
-      this.loading = null;
+      if (this.loading === loading) this.loading = null;
     });
-    return this.loading;
+    this.loading = loading;
+    return loading;
   }
 
-  private call<T>(msg: Record<string, unknown>, audio: Float32Array): Promise<T> {
+  private post<T>(msg: Record<string, unknown>, audio: Float32Array): Promise<T> {
     const id = ++this.seq;
     const w = this.ensureWorker();
-    return new Promise<T>((resolve, reject) => {
+    const copy = audio.slice();
+    const p = new Promise<T>((resolve, reject) => {
       this.waiting.set(id, { resolve: resolve as (v: never) => void, reject });
-      w.postMessage({ ...msg, id, audio }, [audio.buffer]);
+      w.postMessage({ ...msg, id, audio: copy }, [copy.buffer]);
     });
+    // After a GPU process crash, WebGPU calls can hang forever instead of failing.
+    if (!this.loadedKey.endsWith("|webgpu")) return p;
+    return withTimeout(p, Math.max(120, (audio.length / SAMPLE_RATE) * 8) * 1000, "WebGPU timeout");
+  }
+
+  /**
+   * ORT's WebGPU session can break for good mid-recording (buffer download failures, device loss),
+   * after which every call fails. A fresh worker gets a new GPU device; wasm is the last resort.
+   */
+  private call<T>(msg: Record<string, unknown>, audio: Float32Array): Promise<T> {
+    const next = this.queue.then(() => this.callNow<T>(msg, audio));
+    this.queue = next.catch(() => {});
+    return next;
+  }
+
+  private async reload(device: Device) {
+    this.reset();
+    if (device === "webgpu") await withTimeout(this.load(this.model, device), 300_000, "WebGPU timeout (memuat ulang model)");
+    else await this.load(this.model, device);
+  }
+
+  private async callNow<T>(msg: Record<string, unknown>, audio: Float32Array): Promise<T> {
+    if (!this.model || !this.loadedKey) throw new Error("model not loaded");
+    if (this.calls >= RECYCLE_AFTER && (this.loadedKey.endsWith("|webgpu") || this.preferred === "webgpu")) {
+      this.calls = 0;
+      await this.reload(this.preferred).catch(() => this.reload("wasm"));
+    }
+    try {
+      const out = await this.post<T>(msg, audio);
+      this.calls++;
+      return out;
+    } catch (first) {
+      const device = this.loadedKey.split("|")[1] as Device;
+      if (!/OrtRun|gpu|device|buffer|memory|abort/i.test(String((first as Error)?.message))) throw first;
+      console.warn("whisper call failed, restarting worker", first);
+      this.calls = 0;
+      try {
+        await this.reload(device);
+        return await this.post<T>(msg, audio);
+      } catch (second) {
+        if (device !== "webgpu") throw second;
+        console.warn("whisper still failing on WebGPU, switching to wasm", second);
+        await this.reload("wasm");
+        return await this.post<T>(msg, audio);
+      }
+    }
   }
 
   run(audio: Float32Array, language: string): Promise<Chunk[]> {
@@ -110,6 +192,8 @@ class WhisperClient {
     this.worker?.terminate();
     this.worker = null;
     this.loadedKey = "";
+    this.loading = null;
+    this.calls = 0;
     this.waiting.forEach((p) => p.reject(new Error("dibatalkan")));
     this.waiting.clear();
   }
@@ -180,35 +264,49 @@ function pickLanguage(scores: Record<string, number>, fallback?: string) {
   return best;
 }
 
+export const resolveModel = (settings: Settings) =>
+  WHISPER_MODELS.some((m) => m.id === settings.whisperModel) ? settings.whisperModel : WHISPER_MODELS[1].id;
+
+export function prepareWhisper(settings: Settings, onDownload?: (loaded: number, total: number) => void) {
+  return whisper.prepare(resolveModel(settings), settings.whisperDevice, onDownload);
+}
+
+/** Shorter windows cut at pauses usually hold a single speaker turn, so each gets its own language. */
+export const windowSec = (settings: Settings) => (settings.sttLanguage === "auto" ? 12 : 28);
+
 /**
- * Whisper translates whatever it hears into the language it is told, so mixed ID/EN meetings are
- * transcribed window by window in the language actually spoken, biased towards the main language.
+ * Whisper translates whatever it hears into the language it is told, so mixed ID/EN meetings are transcribed window
+ * by window in the language actually spoken, biased towards the meeting's main language as it emerges.
  */
-async function transcribeBrowser(audio: Float32Array, settings: Settings, onProgress: (f: number) => void, onLanguage: (l: string) => void): Promise<Chunk[]> {
-  const auto = settings.sttLanguage === "auto";
-  // Shorter windows cut at pauses usually hold a single speaker turn, so each gets its own language.
-  const windows = speechWindows(audio, auto ? 12 : 28);
-  const perWindow: Record<string, number>[] = [];
-  let main = settings.sttLanguage;
-  if (auto) {
-    const total: Record<string, number> = {};
-    for (const w of windows) {
-      const scores = await whisper.detect(audio.slice(w.start, w.end), DETECT_CANDIDATES);
-      perWindow.push(scores);
-      const weight = (w.end - w.start) / SAMPLE_RATE;
-      for (const [code, s] of Object.entries(scores)) total[code] = (total[code] ?? 0) + s * weight;
-    }
-    main = windows.length ? pickLanguage(total) : "id";
+export class LanguageTracker {
+  private totals: Record<string, number> = {};
+  constructor(
+    private readonly fixed: string | undefined,
+    public main: string | undefined,
+  ) {}
+
+  static for(settings: Settings, known?: string) {
+    return settings.sttLanguage === "auto" ? new LanguageTracker(undefined, known) : new LanguageTracker(settings.sttLanguage, settings.sttLanguage);
   }
-  onLanguage(main);
-  const out: Chunk[] = [];
-  for (let i = 0; i < windows.length; i++) {
-    const w = windows[i];
-    const slice = audio.slice(w.start, w.end);
-    const chunks = await whisper.run(slice, auto ? pickLanguage(perWindow[i], main) : main);
-    const offset = w.start / SAMPLE_RATE;
-    for (const c of chunks) out.push({ start: c.start + offset, end: c.end + offset, text: c.text });
-    onProgress((i + 1) / windows.length);
+
+  async transcribe(slice: Float32Array): Promise<Chunk[]> {
+    let language = this.fixed;
+    if (!language) {
+      const scores = await whisper.detect(slice, DETECT_CANDIDATES);
+      const weight = slice.length / SAMPLE_RATE;
+      for (const [code, s] of Object.entries(scores)) this.totals[code] = (this.totals[code] ?? 0) + s * weight;
+      this.main = pickLanguage(this.totals, this.main);
+      language = pickLanguage(scores, this.main);
+    }
+    return whisper.run(slice, language);
+  }
+}
+
+export function toSegments(chunks: Chunk[], offsetSec: number, channel: Channel, speaker: string, dict: DictionaryEntry[]): Segment[] {
+  const out: Segment[] = [];
+  for (const c of chunks) {
+    const text = applyDictionary(cleanText(c.text), dict);
+    if (text) out.push({ id: uid("g_"), channel, speaker, start: c.start + offsetSec, end: Math.max(c.end, c.start) + offsetSec, text });
   }
   return out;
 }
@@ -234,74 +332,105 @@ async function transcribeApi(blob: Blob, settings: Settings, dict: DictionaryEnt
   return json.segments?.length ? json.segments : [{ start: 0, end: 0, text: json.text ?? "" }];
 }
 
+export type CoverageKey = Channel | "mix";
+export type Coverage = Partial<Record<CoverageKey, Ranges>>;
+
 export interface TranscribeInput {
   audio: AudioTrack[];
   settings: Settings;
   dictionary: DictionaryEntry[];
   speakerFor: (ch: Channel) => string;
   onProgress: Progress;
+  /** Main language already known for this meeting (from live transcription or an earlier, interrupted run). */
+  language?: string;
   onLanguage?: (language: string) => void;
+  /** Spans already transcribed; only the rest is processed. */
+  coverage?: Coverage;
+  /** Called after every window, so progress survives a crash or closed tab. */
+  onWindow: (key: CoverageKey, segments: Segment[], covered: [number, number]) => Promise<void> | void;
 }
 
-export async function transcribeTracks({ audio, settings, dictionary, speakerFor, onProgress, onLanguage }: TranscribeInput): Promise<Segment[]> {
+const isAbort = (e: unknown) => e instanceof DOMException && e.name === "AbortError";
+
+export async function transcribeTracks({ audio, settings, dictionary, speakerFor, onProgress, language, onLanguage, coverage = {}, onWindow }: TranscribeInput) {
   let sources = audio.filter((a) => a.channel === "mic" || a.channel === "system");
   if (!sources.length) sources = audio.filter((a) => a.channel === "mix");
   if (!sources.length) throw new Error("Tidak ada audio untuk ditranskrip.");
 
   if (settings.sttEngine === "browser") {
-    const device = await whisper.resolveDevice(settings.whisperDevice);
-    const model = WHISPER_MODELS.some((m) => m.id === settings.whisperModel) ? settings.whisperModel : WHISPER_MODELS[1].id;
-    await whisper.load(model, device as "webgpu" | "wasm", (loaded, total) =>
+    await prepareWhisper(settings, (loaded, total) =>
       onProgress(0, total ? `Mengunduh model ${Math.round((loaded / total) * 100)}% (sekali saja)` : "Mengunduh model…"),
     );
   }
-
-  const language = settings.sttLanguage;
-  const segments: Segment[] = [];
+  const lang = LanguageTracker.for(settings, language);
   const failures: string[] = [];
   for (let i = 0; i < sources.length; i++) {
     const track = sources[i];
+    const key: CoverageKey = track.channel;
     const channel: Channel = track.channel === "system" ? "system" : "mic";
     const label = sources.length === 1 && track.channel === "mix" ? "" : speakerFor(channel);
+    const offset = (track.offsetMs ?? 0) / 1000;
     const blob = await getBlob(track.blobKey);
     if (!blob) continue;
     const base = i / sources.length;
     const span = 1 / sources.length;
     const name = channel === "system" ? "audio peserta" : "mikrofon";
     onProgress(base, `Menyiapkan ${name}…`);
-    let chunks: Chunk[];
-    let startSec = 0;
+    let stage = "transkripsi gagal";
     try {
       if (settings.sttEngine === "api") {
+        if (!uncovered(coverage[key], offset, offset + 1e7).length) continue;
         onProgress(base, `Mengirim ${name} ke layanan transkripsi…`);
         const bytes = new Uint8Array(await blob.arrayBuffer());
         const repaired = repairHeaderlessWebm(bytes);
-        startSec = repaired?.startSec ?? 0;
-        chunks = await transcribeApi(repaired ? new Blob([repaired.bytes as BlobPart], { type: "audio/webm" }) : blob, settings, dictionary);
-      } else {
-        const decoded = await decodeToMono16k(blob);
-        startSec = decoded.startSec;
-        if (language === "auto") onProgress(base, "Mendeteksi bahasa…");
-        chunks = await transcribeBrowser(
-          decoded.pcm,
-          { ...settings, sttLanguage: language },
-          (f) => onProgress(base + span * f, `Mentranskrip ${name} ${Math.round(f * 100)}%`),
-          (l) => onLanguage?.(l),
-        );
+        const start = offset + (repaired?.startSec ?? 0);
+        const chunks = await transcribeApi(repaired ? new Blob([repaired.bytes as BlobPart], { type: "audio/webm" }) : blob, settings, dictionary);
+        const fresh = toSegments(chunks, start, channel, label, dictionary).filter((s) => !isCovered(coverage[key], (s.start + s.end) / 2));
+        await onWindow(key, fresh, [offset, offset + 1e7]);
+        continue;
+      }
+      stage = "audio tidak dapat dibaca";
+      const pieces = decodePieces(blob, 300, (a, b) => !uncovered(coverage[key], offset + a, offset + b).length);
+      for (let next = await pieces.next(); !next.done; next = await pieces.next()) {
+        stage = "transkripsi gagal";
+        const piece = next.value;
+        const pStart = offset + piece.startSec;
+        for (const [a, b] of uncovered(coverage[key], pStart, offset + piece.endSec)) {
+          const s0 = Math.max(0, Math.round((a - pStart) * SAMPLE_RATE));
+          const s1 = Math.min(piece.pcm.length, Math.round((b - pStart) * SAMPLE_RATE));
+          if (s1 <= s0) {
+            await onWindow(key, [], [a, b]);
+            continue;
+          }
+          const sub = piece.pcm.subarray(s0, s1);
+          const windows = speechWindows(sub, windowSec(settings));
+          let done = a;
+          for (const w of windows) {
+            const at = a + w.start / SAMPLE_RATE;
+            const end = a + w.end / SAMPLE_RATE;
+            const chunks = await lang.transcribe(sub.slice(w.start, w.end));
+            if (lang.main) onLanguage?.(lang.main);
+            await onWindow(key, toSegments(chunks, at, channel, label, dictionary), [done, end]);
+            done = end;
+            onProgress(base + span * piece.fraction(w.end / sub.length, s0, s1), `Mentranskrip ${name} · menit ke-${formatSpan(end)}`);
+          }
+          await onWindow(key, [], [done, b]);
+        }
+        stage = "audio tidak dapat dibaca";
       }
     } catch (e) {
+      if (isAbort(e)) throw e;
       console.warn("transcribe track failed", track.blobKey, e);
-      failures.push(`${name}: ${e instanceof Error ? e.message : String(e)}`);
-      continue;
-    }
-    const offset = (track.offsetMs ?? 0) / 1000 + startSec;
-    for (const c of chunks) {
-      const text = applyDictionary(cleanText(c.text), dictionary);
-      if (!text) continue;
-      segments.push({ id: uid("g_"), channel, speaker: label, start: c.start + offset, end: Math.max(c.end, c.start) + offset, text });
+      failures.push(`${name} ${stage}: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
-  if (failures.length === sources.length) throw new Error(`Audio tidak dapat dibaca (${failures.join("; ")}).`);
-  segments.sort((a, b) => a.start - b.start);
-  return dropEcho(segments);
+  if (failures.length === sources.length) throw new Error(`Transkrip tidak berhasil (${failures.join("; ")}).`);
+  if (failures.length) console.warn("some tracks failed", failures);
+  return { failures };
+}
+
+function formatSpan(sec: number) {
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  return h ? `${h}:${String(m).padStart(2, "0")}` : `${m}`;
 }

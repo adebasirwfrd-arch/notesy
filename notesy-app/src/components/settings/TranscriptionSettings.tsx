@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Download, Loader2 } from "lucide-react";
 import { useSettings } from "../../lib/settings";
-import { STT_LANGUAGES, WHISPER_MODELS, whisper } from "../../lib/stt";
+import { STT_LANGUAGES, WHISPER_MODELS, prepareWhisper } from "../../lib/stt";
 import { hasWebGPU } from "../../lib/platform";
 import { errorMessage } from "../../lib/util";
 import { Card, Field } from "./Field";
@@ -13,8 +13,7 @@ export function TranscriptionSettings() {
   const preload = async () => {
     setDl("Menyiapkan…");
     try {
-      const device = await whisper.resolveDevice(s.whisperDevice);
-      const used = await whisper.load(s.whisperModel, device, (l, t) => setDl(t ? `Mengunduh ${Math.round((l / t) * 100)}%` : "Mengunduh…"));
+      const used = await prepareWhisper(s, (l, t) => setDl(t ? `Mengunduh ${Math.round((l / t) * 100)}%` : "Mengunduh…"));
       setDl(`Siap (${used === "webgpu" ? "WebGPU" : "CPU/WASM"})`);
     } catch (e) {
       setDl(`Gagal: ${errorMessage(e)}`);
@@ -68,6 +67,14 @@ export function TranscriptionSettings() {
               <option value="webgpu">WebGPU</option>
               <option value="wasm">CPU (WASM)</option>
             </select>
+          </Field>
+          <Field
+            label="Transkrip langsung saat merekam"
+            hint="Disarankan untuk rapat panjang: transkrip sudah hampir selesai saat rapat berakhir. Matikan jika laptop terasa berat selama rapat; transkrip lalu dibuat setelah rekaman selesai."
+          >
+            <label className="toggle">
+              <input type="checkbox" checked={s.liveTranscribe} onChange={(e) => set({ liveTranscribe: e.target.checked })} /> Aktif
+            </label>
           </Field>
           <Field label="Unduh model sekarang" hint="Agar rapat pertama langsung bisa ditranskrip, termasuk saat offline.">
             <button className="btn" onClick={preload} disabled={!!dl && dl.startsWith("Mengunduh")}>

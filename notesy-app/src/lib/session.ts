@@ -3,7 +3,9 @@ import { deleteNote, getNote, listNotes, orphanChunkSessions, putBlob, putNote, 
 import { MeetingRecorder, finalizeTracks, parseSessionKey, pickMime, type CaptureMode, type Levels } from "./recorder";
 import { SlideWatcher, encodeFrame, saveSlide } from "./slides";
 import { dictionaryStore, getSettings } from "./settings";
-import { transcribeTracks } from "./stt";
+import { dropEcho, transcribeTracks } from "./stt";
+import { LiveTranscriber } from "./stt/live";
+import { TranscriptWriter } from "./stt/writer";
 import { aiConfigured, describeSlides, generateMomItems, generateSummary } from "./ai";
 import type { Channel, Note, NoteStatus } from "./types";
 import { errorMessage, formatDate, formatTime, uid } from "./util";
@@ -25,6 +27,9 @@ export interface LiveSession {
 let live: LiveSession | null = null;
 let recorder: MeetingRecorder | null = null;
 let watcher: SlideWatcher | null = null;
+let liveStt: LiveTranscriber | null = null;
+/** Live transcribers still finishing queued speech after their recording stopped. */
+const liveDrains = new Map<string, { stt: LiveTranscriber; done: Promise<void> }>();
 const subs = new Set<() => void>();
 const set = (next: LiveSession | null) => {
   live = next;
@@ -150,7 +155,11 @@ export async function startRecording(mode: CaptureMode, existingNoteId?: string)
     n.source = mode;
     n.audio = [];
     n.events = [];
+    n.transcript = [];
+    n.transcriptCoverage = {};
+    n.transcriptComplete = false;
   });
+  startLiveTranscription(noteId, rec);
   startWatcher();
   set({
     ...live!,
@@ -162,6 +171,16 @@ export async function startRecording(mode: CaptureMode, existingNoteId?: string)
   window.addEventListener("beforeunload", warnUnload);
   if (mode === "mic") wakeLock = await navigator.wakeLock?.request("screen").catch(() => null);
   return noteId;
+}
+
+function startLiveTranscription(noteId: string, rec: MeetingRecorder) {
+  const s = getSettings();
+  if (s.sttEngine !== "browser" || !s.liveTranscribe) return;
+  const stt = new LiveTranscriber(noteId, s, () => rec.elapsed(), (ch) => (ch === "mic" ? s.meLabel : s.othersLabel), dictionaryStore.get());
+  liveStt = stt;
+  rec.onAudioAttached = (ch, stream) => void stt.attach(ch, stream);
+  rec.onAudioDetached = (ch) => stt.detach(ch);
+  for (const { channel, stream } of rec.audioStreams()) void stt.attach(channel, stream);
 }
 
 function startWatcher() {
@@ -257,12 +276,14 @@ function warnUnload(e: BeforeUnloadEvent) {
 
 export function pauseRecording() {
   recorder?.pause();
+  liveStt?.pause();
   if (watcher) watcher.paused = true;
   patch({ state: "paused" });
 }
 
 export function resumeRecording() {
   recorder?.resume();
+  liveStt?.resume();
   if (watcher) watcher.paused = false;
   patch({ state: "recording" });
 }
@@ -293,6 +314,12 @@ export async function stopRecording() {
   const rec = recorder;
   const { tracks, durationMs } = await rec.stop();
   recorder = null;
+  if (liveStt) {
+    const stt = liveStt;
+    liveStt = null;
+    const done = stt.finish().finally(() => liveDrains.delete(noteId));
+    liveDrains.set(noteId, { stt, done });
+  }
   window.removeEventListener("beforeunload", warnUnload);
   void wakeLock?.release().catch(() => {});
   wakeLock = null;
@@ -305,6 +332,9 @@ export async function stopRecording() {
   void processNote(noteId);
   set(null);
 }
+
+/** Notes from before resumable transcription have no flag: a transcript there means it finished. */
+export const isTranscriptComplete = (n: Note) => n.transcriptComplete ?? n.transcript.length > 0;
 
 const jobs = new Map<string, AbortController>();
 export const isProcessing = (noteId: string) => jobs.has(noteId);
@@ -326,6 +356,8 @@ const setStatus = (noteId: string, status: NoteStatus) =>
 
 export interface ProcessOptions {
   transcribe?: boolean;
+  /** Throw away the current transcript and start over; by default a partial transcript is resumed. */
+  fresh?: boolean;
   summarize?: boolean;
   templateId?: string;
 }
@@ -338,27 +370,54 @@ export async function processNote(noteId: string, opts: ProcessOptions = {}) {
   try {
     let note = await getNote(noteId);
     if (!note) return;
-    const doTranscribe = opts.transcribe ?? (note.audio.length > 0 && note.transcript.length === 0);
+    const complete = isTranscriptComplete(note);
+    const doTranscribe = opts.transcribe ?? (note.audio.length > 0 && !complete);
     if (doTranscribe && note.audio.length) {
       await setStatus(noteId, { kind: "transcribing", progress: 0, detail: "Menyiapkan transkripsi…" });
+      const drain = liveDrains.get(noteId);
+      if (drain) {
+        const tick = setInterval(() => {
+          const left = Math.round(drain.stt.backlogSec);
+          void setStatus(noteId, { kind: "transcribing", progress: 0, detail: left ? `Menyelesaikan transkrip live (sisa ${left} detik ucapan)…` : "Menyimpan transkrip live…" });
+        }, 1000);
+        await Promise.race([
+          drain.done,
+          new Promise<never>((_, reject) => ctrl.signal.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")))),
+        ]).finally(() => clearInterval(tick));
+      }
+      if (opts.fresh ?? complete) {
+        await updateNote(noteId, (n) => {
+          n.transcript = [];
+          n.transcriptCoverage = {};
+          n.transcriptComplete = false;
+        });
+      }
+      note = (await getNote(noteId))!;
+      const writer = new TranscriptWriter(noteId);
       let last = 0;
-      let language = s.sttLanguage;
-      const segments = await transcribeTracks({
-        onLanguage: (l) => (language = l),
-        audio: note.audio,
-        settings: s,
-        dictionary: dictionaryStore.get(),
-        speakerFor: (ch: Channel) => (ch === "mic" ? s.meLabel : s.othersLabel),
-        onProgress: (progress, detail) => {
-          if (ctrl.signal.aborted) throw new DOMException("aborted", "AbortError");
-          if (Date.now() - last < 400 && progress < 1) return;
-          last = Date.now();
-          void setStatus(noteId, { kind: "transcribing", progress, detail });
-        },
-      });
+      try {
+        await transcribeTracks({
+          audio: note.audio,
+          settings: s,
+          dictionary: dictionaryStore.get(),
+          speakerFor: (ch: Channel) => (ch === "mic" ? s.meLabel : s.othersLabel),
+          language: note.language,
+          coverage: note.transcriptCoverage ?? {},
+          onLanguage: (l) => writer.setLanguage(l),
+          onWindow: (key, segments, range) => writer.add(key, segments, range),
+          onProgress: (progress, detail) => {
+            if (ctrl.signal.aborted) throw new DOMException("aborted", "AbortError");
+            if (Date.now() - last < 400 && progress < 1) return;
+            last = Date.now();
+            void setStatus(noteId, { kind: "transcribing", progress, detail });
+          },
+        });
+      } finally {
+        await writer.flush();
+      }
       await updateNote(noteId, (n) => {
-        n.transcript = segments;
-        n.language = language;
+        n.transcript = dropEcho([...n.transcript].sort((x, y) => x.start - y.start));
+        n.transcriptComplete = true;
       });
     }
     note = (await getNote(noteId))!;
@@ -453,7 +512,7 @@ export async function recoverInterrupted() {
       });
     } else if (["transcribing", "describing", "summarizing"].includes(n.status.kind)) {
       await updateNote(n.id, (x) => {
-        x.status = { kind: "error", message: "Proses terhenti karena aplikasi ditutup. Klik Proses ulang." };
+        x.status = { kind: "error", message: "Proses terhenti karena aplikasi ditutup. Klik Proses ulang untuk melanjutkan dari bagian terakhir." };
       });
     }
   }
