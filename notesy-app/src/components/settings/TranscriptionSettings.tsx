@@ -33,7 +33,7 @@ export function TranscriptionSettings() {
           </button>
         </div>
       </Field>
-      <Field label="Bahasa rapat" hint="Otomatis cocok untuk rapat yang mencampur Indonesia dan Inggris.">
+      <Field label="Bahasa rapat" hint="Transkrip ditulis dalam bahasa yang diucapkan, tidak diterjemahkan. Otomatis mendeteksi bahasa setiap potongan ucapan, cocok untuk rapat campuran Indonesia dan Inggris. Memilih satu bahasa membuat bagian berbahasa lain ikut diterjemahkan.">
         <select value={s.sttLanguage} onChange={(e) => set({ sttLanguage: e.target.value })}>
           {STT_LANGUAGES.map((l) => (
             <option key={l.id} value={l.id}>

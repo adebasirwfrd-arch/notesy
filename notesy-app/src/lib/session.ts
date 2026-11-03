@@ -218,7 +218,9 @@ export async function processNote(noteId: string, opts: ProcessOptions = {}) {
     if (doTranscribe && note.audio.length) {
       await setStatus(noteId, { kind: "transcribing", progress: 0, detail: "Menyiapkan transkripsi…" });
       let last = 0;
+      let language = s.sttLanguage;
       const segments = await transcribeTracks({
+        onLanguage: (l) => (language = l),
         audio: note.audio,
         settings: s,
         dictionary: dictionaryStore.get(),
@@ -232,7 +234,7 @@ export async function processNote(noteId: string, opts: ProcessOptions = {}) {
       });
       await updateNote(noteId, (n) => {
         n.transcript = segments;
-        n.language = s.sttLanguage;
+        n.language = language;
       });
     }
     note = (await getNote(noteId))!;

@@ -29,7 +29,7 @@ interface Chunk {
 class WhisperClient {
   private worker: Worker | null = null;
   private seq = 0;
-  private waiting = new Map<number, { resolve: (c: Chunk[]) => void; reject: (e: Error) => void }>();
+  private waiting = new Map<number, { resolve: (v: never) => void; reject: (e: Error) => void }>();
   private loading: Promise<string> | null = null;
   private loadedKey = "";
   private onDownload: ((loaded: number, total: number) => void) | null = null;
@@ -40,8 +40,8 @@ class WhisperClient {
     w.onmessage = (e) => {
       const m = e.data;
       if (m.type === "download") this.onDownload?.(m.loaded, m.total);
-      else if (m.type === "result") {
-        this.waiting.get(m.id)?.resolve(m.chunks);
+      else if (m.type === "result" || m.type === "detected") {
+        this.waiting.get(m.id)?.resolve((m.type === "result" ? m.chunks : m.scores) as never);
         this.waiting.delete(m.id);
       } else if (m.type === "error" && m.id !== undefined) {
         this.waiting.get(m.id)?.reject(new Error(m.message));
@@ -88,13 +88,21 @@ class WhisperClient {
     return this.loading;
   }
 
-  run(audio: Float32Array, language: string | null): Promise<Chunk[]> {
+  private call<T>(msg: Record<string, unknown>, audio: Float32Array): Promise<T> {
     const id = ++this.seq;
     const w = this.ensureWorker();
-    return new Promise((resolve, reject) => {
-      this.waiting.set(id, { resolve, reject });
-      w.postMessage({ type: "run", id, audio, language }, [audio.buffer]);
+    return new Promise<T>((resolve, reject) => {
+      this.waiting.set(id, { resolve: resolve as (v: never) => void, reject });
+      w.postMessage({ ...msg, id, audio }, [audio.buffer]);
     });
+  }
+
+  run(audio: Float32Array, language: string): Promise<Chunk[]> {
+    return this.call({ type: "run", language }, audio);
+  }
+
+  detect(audio: Float32Array, candidates: string[]): Promise<Record<string, number>> {
+    return this.call({ type: "detect", candidates }, audio);
   }
 
   reset() {
@@ -122,7 +130,7 @@ const HALLUCINATIONS = [
 
 export function cleanText(text: string) {
   let t = text.replace(/\s+/g, " ").trim();
-  t = t.replace(/\b(\w+)(\s+\1\b){5,}/gi, "$1");
+  t = t.replace(/\b(\w+(?:\s+\w+){0,3}?)(?:[\s,.]+\1\b){3,}/giu, "$1");
   if (HALLUCINATIONS.some((r) => r.test(t))) return "";
   return t;
 }
@@ -158,14 +166,45 @@ export function dropEcho(segments: Segment[]) {
   });
 }
 
-async function transcribeBrowser(audio: Float32Array, settings: Settings, onProgress: (f: number) => void): Promise<Chunk[]> {
-  const windows = speechWindows(audio);
-  const language = settings.sttLanguage === "auto" ? null : settings.sttLanguage;
+const DETECT_CANDIDATES = ["id", "en", "ms", "jv"];
+
+/** Logit margin a window needs over the recording's main language before it is transcribed in another language. */
+const SWITCH_MARGIN = 1;
+
+function pickLanguage(scores: Record<string, number>, fallback?: string) {
+  const ranked = Object.entries(scores).sort((a, b) => b[1] - a[1]);
+  let best = ranked[0]?.[0] ?? fallback ?? "id";
+  if (best === "ms" && (scores.id ?? -Infinity) > scores.ms - SWITCH_MARGIN) best = "id";
+  if (fallback && best !== fallback && scores[best] - (scores[fallback] ?? -Infinity) < SWITCH_MARGIN) best = fallback;
+  return best;
+}
+
+/**
+ * Whisper translates whatever it hears into the language it is told, so mixed ID/EN meetings are
+ * transcribed window by window in the language actually spoken, biased towards the main language.
+ */
+async function transcribeBrowser(audio: Float32Array, settings: Settings, onProgress: (f: number) => void, onLanguage: (l: string) => void): Promise<Chunk[]> {
+  const auto = settings.sttLanguage === "auto";
+  // Shorter windows cut at pauses usually hold a single speaker turn, so each gets its own language.
+  const windows = speechWindows(audio, auto ? 12 : 28);
+  const perWindow: Record<string, number>[] = [];
+  let main = settings.sttLanguage;
+  if (auto) {
+    const total: Record<string, number> = {};
+    for (const w of windows) {
+      const scores = await whisper.detect(audio.slice(w.start, w.end), DETECT_CANDIDATES);
+      perWindow.push(scores);
+      const weight = (w.end - w.start) / SAMPLE_RATE;
+      for (const [code, s] of Object.entries(scores)) total[code] = (total[code] ?? 0) + s * weight;
+    }
+    main = windows.length ? pickLanguage(total) : "id";
+  }
+  onLanguage(main);
   const out: Chunk[] = [];
   for (let i = 0; i < windows.length; i++) {
     const w = windows[i];
     const slice = audio.slice(w.start, w.end);
-    const chunks = await whisper.run(slice, language);
+    const chunks = await whisper.run(slice, auto ? pickLanguage(perWindow[i], main) : main);
     const offset = w.start / SAMPLE_RATE;
     for (const c of chunks) out.push({ start: c.start + offset, end: c.end + offset, text: c.text });
     onProgress((i + 1) / windows.length);
@@ -200,9 +239,10 @@ export interface TranscribeInput {
   dictionary: DictionaryEntry[];
   speakerFor: (ch: Channel) => string;
   onProgress: Progress;
+  onLanguage?: (language: string) => void;
 }
 
-export async function transcribeTracks({ audio, settings, dictionary, speakerFor, onProgress }: TranscribeInput): Promise<Segment[]> {
+export async function transcribeTracks({ audio, settings, dictionary, speakerFor, onProgress, onLanguage }: TranscribeInput): Promise<Segment[]> {
   let sources = audio.filter((a) => a.channel === "mic" || a.channel === "system");
   if (!sources.length) sources = audio.filter((a) => a.channel === "mix");
   if (!sources.length) throw new Error("Tidak ada audio untuk ditranskrip.");
@@ -215,6 +255,7 @@ export async function transcribeTracks({ audio, settings, dictionary, speakerFor
     );
   }
 
+  const language = settings.sttLanguage;
   const segments: Segment[] = [];
   for (let i = 0; i < sources.length; i++) {
     const track = sources[i];
@@ -232,7 +273,13 @@ export async function transcribeTracks({ audio, settings, dictionary, speakerFor
       chunks = await transcribeApi(blob, settings, dictionary);
     } else {
       const pcm = await decodeToMono16k(blob);
-      chunks = await transcribeBrowser(pcm, settings, (f) => onProgress(base + span * f, `Mentranskrip ${name} ${Math.round(f * 100)}%`));
+      if (language === "auto") onProgress(base, "Mendeteksi bahasa…");
+      chunks = await transcribeBrowser(
+        pcm,
+        { ...settings, sttLanguage: language },
+        (f) => onProgress(base + span * f, `Mentranskrip ${name} ${Math.round(f * 100)}%`),
+        (l) => onLanguage?.(l),
+      );
     }
     for (const c of chunks) {
       const text = applyDictionary(cleanText(c.text), dictionary);
