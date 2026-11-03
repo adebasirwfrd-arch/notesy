@@ -1,6 +1,6 @@
 import type { Channel, DictionaryEntry, Settings } from "../types";
 import { SAMPLE_RATE, hasSpeech, peakRms, quietCut } from "./audio";
-import { LanguageTracker, liveRoute, prepareWhisper, toSegments, transcribeWindow, windowSec, type Route } from "./index";
+import { LanguageTracker, liveRoute, prepareWhisper, tail, toSegments, transcribeWindow, windowSec, type Route } from "./index";
 import { TranscriptWriter } from "./writer";
 import { cloudEnabled } from "./cloud";
 import { assetUrl } from "../platform";
@@ -77,6 +77,7 @@ export class LiveTranscriber {
   private stopped = false;
   private broken = false;
   private readonly lang: LanguageTracker;
+  private readonly prior = new Map<Channel, string>();
   private readonly writer: TranscriptWriter;
   private readonly model: Promise<unknown>;
   /** Longest window cut from live audio; cloud-only meetings use long windows to save requests. */
@@ -178,7 +179,8 @@ export class LiveTranscriber {
       const item = route === "cloud" ? this.takeJoined() : this.queue.shift()!;
       this.queuedSec = Math.max(0, this.queuedSec - item.pcm.length / SAMPLE_RATE);
       try {
-        const { chunks } = await transcribeWindow(item.pcm, this.lang, this.settings, this.dictionary, route);
+        const { chunks } = await transcribeWindow(item.pcm, this.lang, this.settings, this.dictionary, route, this.prior.get(item.channel));
+        this.prior.set(item.channel, tail(chunks));
         if (this.lang.main) this.writer.setLanguage(this.lang.main);
         const segments = toSegments(chunks, item.startSec, item.channel, this.speakerFor(item.channel), this.dictionary);
         this.writer.add(item.channel, segments, [item.startSec, item.startSec + item.pcm.length / SAMPLE_RATE]);

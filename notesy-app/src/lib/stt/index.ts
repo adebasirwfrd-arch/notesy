@@ -218,11 +218,14 @@ const HALLUCINATIONS = [
   /amara\.org/i,
   /^\W*(music|musik|applause|tepuk tangan)\W*$/i,
   /^[\s♪.…-]*$/,
+  /^\W*hai\W*$/i,
 ];
 
 export function cleanText(text: string) {
   let t = text.replace(/\s+/g, " ").trim();
   t = t.replace(/\b(\w+(?:\s+\w+){0,3}?)(?:[\s,.]+\1\b){3,}/giu, "$1");
+  // "Hai" is what Whisper hears in clicks and breaths at the start of Indonesian segments.
+  t = t.replace(/^(?:hai[\s,.!]+)+(?=\S)/i, "");
   if (HALLUCINATIONS.some((r) => r.test(t))) return "";
   return t;
 }
@@ -330,10 +333,17 @@ export function liveRoute(settings: Settings, backlogSec: number): Route {
 }
 
 /** Transcribes one window on the chosen engine; the local model takes over whenever the cloud cannot. */
-export async function transcribeWindow(pcm: Float32Array, lang: LanguageTracker, settings: Settings, dict: DictionaryEntry[], route: Route): Promise<{ chunks: Chunk[]; route: Route }> {
+export async function transcribeWindow(
+  pcm: Float32Array,
+  lang: LanguageTracker,
+  settings: Settings,
+  dict: DictionaryEntry[],
+  route: Route,
+  context = "",
+): Promise<{ chunks: Chunk[]; route: Route }> {
   if (route === "cloud") {
     try {
-      const r = await cloudTranscribe(pcm, settings, dict);
+      const r = await cloudTranscribe(pcm, settings, dict, context);
       lang.noteCloud(r.language, pcm.length / SAMPLE_RATE);
       return { chunks: r.chunks, route };
     } catch (e) {
@@ -344,10 +354,20 @@ export async function transcribeWindow(pcm: Float32Array, lang: LanguageTracker,
   return { chunks: await lang.transcribe(pcm), route: "local" };
 }
 
+/** The end of a window's text, passed to the next window as Whisper context. */
+export const tail = (chunks: Chunk[]) =>
+  chunks
+    .map((c) => cleanText(c.text))
+    .join(" ")
+    .slice(-240);
+
 export function toSegments(chunks: Chunk[], offsetSec: number, channel: Channel, speaker: string, dict: DictionaryEntry[]): Segment[] {
   const out: Segment[] = [];
+  const norm = (t: string) => t.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
   for (const c of chunks) {
     const text = applyDictionary(cleanText(c.text), dict);
+    // Whisper repeats a short phrase in consecutive segments when it loses track over noise.
+    if (text && out.length && norm(out[out.length - 1].text) === norm(text)) continue;
     if (text) out.push({ id: uid("g_"), channel, speaker, start: c.start + offsetSec, end: Math.max(c.end, c.start) + offsetSec, text });
   }
   return out;
@@ -450,10 +470,12 @@ export async function transcribeTracks({ audio, settings, dictionary, speakerFor
           const sub = piece.pcm.subarray(s0, s1);
           const windows = speechWindows(sub, maxSec);
           let done = a;
+          let context = "";
           for (const w of windows) {
             const at = a + w.start / SAMPLE_RATE;
             const end = a + w.end / SAMPLE_RATE;
-            const r = await transcribeWindow(sub.slice(w.start, w.end), lang, settings, dictionary, route);
+            const r = await transcribeWindow(sub.slice(w.start, w.end), lang, settings, dictionary, route, context);
+            context = tail(r.chunks);
             if (lang.main) onLanguage?.(lang.main);
             await onWindow(key, toSegments(r.chunks, at, channel, label, dictionary), [done, end]);
             done = end;

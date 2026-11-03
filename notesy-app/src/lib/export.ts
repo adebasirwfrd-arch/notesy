@@ -1,3 +1,4 @@
+import { paragraphs } from "./paragraphs";
 import { db, getBlob, listSlides, putBlob, putNote, putSlide, emit } from "./db";
 import { speakerName } from "./ai/prompts";
 import type { Note, Slide } from "./types";
@@ -13,15 +14,9 @@ async function slideDataUrls(noteId: string) {
 }
 
 export function transcriptMarkdown(note: Note) {
-  let last = "";
-  const out: string[] = [];
-  for (const s of note.transcript) {
-    const who = speakerName(note, s);
-    if (who !== last) out.push(`\n**${who}** [${formatClock(s.start * 1000)}]`);
-    out.push(s.text);
-    last = who;
-  }
-  return out.join("\n").trim();
+  return paragraphs(note.transcript, (s) => speakerName(note, s))
+    .map((p) => `**${p.speaker}** [${formatClock(p.items[0].start * 1000)}]\n${p.items.map((s) => s.text).join(" ")}`)
+    .join("\n\n");
 }
 
 export async function noteMarkdown(note: Note, opts: { inlineImages: boolean }) {

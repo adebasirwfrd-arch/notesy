@@ -41,7 +41,7 @@ export default async function handler(req: Request) {
   const pass = process.env.NOTESY_PASSCODE ?? "";
   if (!key || !pass) return reply(503, { message: "Server Notesy belum diisi GROQ_API_KEY dan NOTESY_PASSCODE." });
   if (!sameSecret(req.headers.get("x-notesy-pass") ?? "", pass)) return reply(401, { message: "Kode akses Notesy salah." });
-  if (req.method === "GET") return reply(200, { ok: true, model: process.env.GROQ_STT_MODEL || "whisper-large-v3-turbo" });
+  if (req.method === "GET") return reply(200, { ok: true, model: process.env.GROQ_STT_MODEL || "whisper-large-v3" });
   if (req.method !== "POST") return reply(405, { message: "Metode tidak didukung." });
 
   const audio = await req.arrayBuffer();
@@ -51,7 +51,8 @@ export default async function handler(req: Request) {
   const url = new URL(req.url);
   const form = new FormData();
   form.append("file", new Blob([audio], { type: req.headers.get("content-type") || "audio/wav" }), "window.wav");
-  form.append("model", process.env.GROQ_STT_MODEL || "whisper-large-v3-turbo");
+  // Full large-v3 is noticeably more accurate than turbo on far-field Indonesian speech.
+  form.append("model", process.env.GROQ_STT_MODEL || "whisper-large-v3");
   form.append("response_format", "verbose_json");
   form.append("temperature", "0");
   const language = url.searchParams.get("language") ?? "";

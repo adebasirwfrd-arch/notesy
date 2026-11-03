@@ -7,8 +7,9 @@ import { speakerName } from "../../lib/ai/prompts";
 import { transcriptMarkdown } from "../../lib/export";
 import { download, formatClock, safeFileName } from "../../lib/util";
 import { toast } from "../../lib/toast";
+import { paragraphs } from "../../lib/paragraphs";
 import { useSettings } from "../../lib/settings";
-import type { Note, Segment } from "../../lib/types";
+import type { Note } from "../../lib/types";
 
 const COLORS = ["#2563eb", "#db2777", "#059669", "#d97706", "#7c3aed", "#0891b2"];
 
@@ -28,14 +29,8 @@ export function TranscriptTab({ note, isLive }: { note: Note; isLive: boolean })
   const groups = useMemo(() => {
     const term = q.trim().toLowerCase();
     const segs = term ? note.transcript.filter((s) => s.text.toLowerCase().includes(term)) : note.transcript;
-    const out: { speaker: string; items: Segment[] }[] = [];
-    for (const s of segs) {
-      const last = out.at(-1);
-      const prev = last?.items.at(-1);
-      if (last && prev && last.speaker === s.speaker && !term && s.start - prev.end < 2.5) last.items.push(s);
-      else out.push({ speaker: s.speaker, items: [s] });
-    }
-    return out;
+    if (term) return segs.map((s) => ({ speaker: s.speaker, items: [s] }));
+    return paragraphs(segs, (s) => s.speaker);
   }, [note.transcript, q]);
 
   const activeId = useMemo(() => {

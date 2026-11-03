@@ -59,7 +59,8 @@ function wav(pcm: Float32Array) {
 }
 
 /** Transcribes one window on the Notesy server (Groq Whisper Large v3 Turbo). Throws CloudBusyError when rate-limited. */
-export async function cloudTranscribe(pcm: Float32Array, s: Settings, dict: DictionaryEntry[]): Promise<{ chunks: CloudChunk[]; language?: string }> {
+/** `context` is the end of the previous window's text; Whisper uses it to keep names, spelling and sentences consistent. */
+export async function cloudTranscribe(pcm: Float32Array, s: Settings, dict: DictionaryEntry[], context = ""): Promise<{ chunks: CloudChunk[]; language?: string }> {
   const wait = cloudWaitMs();
   if (Date.now() < pausedUntil && wait > MAX_WAIT_MS) throw new CloudBusyError("Kuota cloud sedang penuh.");
   nextAt = Math.max(Date.now(), nextAt) + MIN_GAP_MS;
@@ -67,7 +68,8 @@ export async function cloudTranscribe(pcm: Float32Array, s: Settings, dict: Dict
   const params = new URLSearchParams();
   if (s.sttLanguage !== "auto") params.set("language", s.sttLanguage === "jv" ? "jw" : s.sttLanguage);
   const terms = dict.map((d) => d.term).slice(0, 60);
-  if (terms.length) params.set("prompt", `Istilah: ${terms.join(", ")}.`);
+  const prompt = [terms.length ? `Istilah: ${terms.join(", ")}.` : "", context.slice(-240)].filter(Boolean).join(" ");
+  if (prompt) params.set("prompt", prompt);
   let res: Response;
   try {
     res = await fetch(`${endpoint()}?${params}`, {
