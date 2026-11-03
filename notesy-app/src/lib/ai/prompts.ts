@@ -64,9 +64,10 @@ export interface SummaryContext {
   extraInstructions?: string;
   userName?: string;
   meLabel?: string;
+  micOnly?: boolean;
 }
 
-export function summaryPrompt({ note, slides, template, language, maxImages, extraInstructions, userName, meLabel }: SummaryContext) {
+export function summaryPrompt({ note, slides, template, language, maxImages, extraInstructions, userName, meLabel, micOnly }: SummaryContext) {
   const speakers = [...new Set(note.transcript.map((s) => speakerName(note, s)))];
   const words = note.transcript.reduce((n, s) => n + s.text.split(/\s+/).length, 0);
   const length = words < 600 ? "ringkas (± 150–300 kata)" : words < 3000 ? "sedang (± 300–600 kata)" : "lengkap (± 600–1200 kata)";
@@ -87,7 +88,11 @@ export function summaryPrompt({ note, slides, template, language, maxImages, ext
 - Judul sementara: ${note.title}
 - Tanggal: ${formatDate(note.createdAt)} ${formatTime(note.startedAt ?? note.createdAt)}
 - Durasi: ${formatClock(note.durationMs)}
-- Pembicara terdeteksi: ${speakers.join(", ") || "-"}${userName ? `\n- Pengguna aplikasi bernama ${userName}${meLabel ? `; hanya baris berlabel "${meLabel}" yang diucapkan olehnya` : ""}. Jangan menganggap kata "saya" dari pembicara lain sebagai ${userName}.` : ""}
+- Pembicara terdeteksi: ${speakers.join(", ") || "-"}${userName ? `\n- Pengguna aplikasi bernama ${userName}${meLabel ? `; hanya baris berlabel "${meLabel}" yang diucapkan olehnya` : ""}. Jangan menganggap kata "saya" dari pembicara lain sebagai ${userName}.` : ""}${
+    micOnly
+      ? `\n- Audio hanya dari satu mikrofon: suara peserta rapat online (dari speaker) dan orang di ruangan terekam dengan label yang sama. Label pembicara tidak menunjukkan siapa yang bicara, jadi jangan menyebut label itu atau ${userName || "pengguna"} sebagai pembicara. Tulis "peserta" atau nama yang disebut dalam percakapan.`
+      : ""
+  }
 
 ## Catatan pribadi pengguna (memo) — prioritaskan poin yang ditandai di sini
 ${note.memo.trim() || "(kosong)"}

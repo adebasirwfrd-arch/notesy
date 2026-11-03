@@ -132,7 +132,8 @@ export async function generateSummary(
     maxImages: s.maxSlidesInSummary,
     extraInstructions: s.extraInstructions,
     userName: s.displayName,
-    meLabel: note.transcript.some((x) => x.channel === "mic" && x.speaker) ? s.meLabel : undefined,
+    meLabel: note.transcript.some((x) => x.channel === "system") ? s.meLabel : undefined,
+    micOnly: !note.transcript.some((x) => x.channel === "system"),
   });
   const dict = dictionaryStore.get();
   const glossary = dict.length ? `\n\nKamus istilah (ejaan yang benar): ${dict.map((d) => d.term).join(", ")}` : "";
