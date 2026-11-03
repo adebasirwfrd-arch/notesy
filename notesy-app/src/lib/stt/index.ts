@@ -3,6 +3,7 @@ import { ensureHostPermission, assetUrl, hasWebGPU } from "../platform";
 import type { AudioTrack, Channel, DictionaryEntry, Segment, Settings } from "../types";
 import { uid } from "../util";
 import { decodePieces, SAMPLE_RATE, speechWindows } from "./audio";
+import { CloudBusyError, cloudEnabled, cloudTranscribe } from "./cloud";
 import { isCovered, uncovered, type Ranges } from "./coverage";
 import { repairHeaderlessWebm } from "./webm";
 
@@ -58,6 +59,7 @@ class WhisperClient {
   /** Loads the model on the device the user prefers; later recoveries return to that device when they can. */
   async prepare(model: string, pref: Settings["whisperDevice"], onDownload?: (loaded: number, total: number) => void): Promise<string> {
     const preferred = await this.resolveDevice(pref);
+    if (this.model === model && this.preferred === preferred && this.loadedKey.startsWith(`${model}|`)) return this.loadedKey.split("|")[1];
     const next = this.queue.then(() => {
       this.model = model;
       this.preferred = preferred;
@@ -85,15 +87,20 @@ class WhisperClient {
     return w;
   }
 
+  private gpu: Promise<boolean> | null = null;
+
   async resolveDevice(pref: Settings["whisperDevice"]): Promise<"webgpu" | "wasm"> {
-    if (pref === "wasm") return "wasm";
-    if (!hasWebGPU) return "wasm";
-    try {
-      const adapter = await (navigator as unknown as { gpu: { requestAdapter(): Promise<unknown> } }).gpu.requestAdapter();
-      return adapter ? "webgpu" : "wasm";
-    } catch {
-      return "wasm";
-    }
+    if (pref === "wasm" || !hasWebGPU) return "wasm";
+    this.gpu ??= (navigator as unknown as { gpu: { requestAdapter(): Promise<unknown> } }).gpu
+      .requestAdapter()
+      .then((a) => !!a)
+      .catch(() => false);
+    return (await this.gpu) ? "webgpu" : "wasm";
+  }
+
+  /** The device the model runs on now, or null when it is not loaded. */
+  get device(): Device | null {
+    return this.loadedKey ? (this.loadedKey.split("|")[1] as Device) : null;
   }
 
   load(model: string, device: Device, onDownload?: (loaded: number, total: number) => void): Promise<string> {
@@ -300,6 +307,41 @@ export class LanguageTracker {
     }
     return whisper.run(slice, language);
   }
+
+  /** Counts a language the cloud detected, for the meeting's main language when no local scores exist. */
+  noteCloud(language: string | undefined, seconds: number) {
+    if (this.fixed || !language) return;
+    this.votes[language] = (this.votes[language] ?? 0) + seconds;
+    if (!Object.keys(this.totals).length) this.main = Object.entries(this.votes).sort((a, b) => b[1] - a[1])[0][0];
+  }
+  private votes: Record<string, number> = {};
+}
+
+export type Route = "local" | "cloud";
+
+/** Post-meeting work is what people wait on, so it goes to the cloud whenever the cloud is enabled. */
+export const batchRoute = (settings: Settings): Route => (settings.sttEngine === "browser" && cloudEnabled(settings) ? "cloud" : "local");
+
+/** Live windows stay on the device unless it has no GPU or has fallen more than a minute behind. */
+export function liveRoute(settings: Settings, backlogSec: number): Route {
+  if (!cloudEnabled(settings)) return "local";
+  if (settings.sttCloud === "always") return "cloud";
+  return whisper.device === "wasm" || backlogSec > 60 ? "cloud" : "local";
+}
+
+/** Transcribes one window on the chosen engine; the local model takes over whenever the cloud cannot. */
+export async function transcribeWindow(pcm: Float32Array, lang: LanguageTracker, settings: Settings, dict: DictionaryEntry[], route: Route): Promise<{ chunks: Chunk[]; route: Route }> {
+  if (route === "cloud") {
+    try {
+      const r = await cloudTranscribe(pcm, settings, dict);
+      lang.noteCloud(r.language, pcm.length / SAMPLE_RATE);
+      return { chunks: r.chunks, route };
+    } catch (e) {
+      if (!(e instanceof CloudBusyError)) console.warn("cloud transcription failed, using the local model", e);
+    }
+  }
+  await prepareWhisper(settings);
+  return { chunks: await lang.transcribe(pcm), route: "local" };
 }
 
 export function toSegments(chunks: Chunk[], offsetSec: number, channel: Channel, speaker: string, dict: DictionaryEntry[]): Segment[] {
@@ -357,11 +399,14 @@ export async function transcribeTracks({ audio, settings, dictionary, speakerFor
   if (!sources.length) sources = audio.filter((a) => a.channel === "mix");
   if (!sources.length) throw new Error("Tidak ada audio untuk ditranskrip.");
 
-  if (settings.sttEngine === "browser") {
+  const route = batchRoute(settings);
+  if (settings.sttEngine === "browser" && route === "local") {
     await prepareWhisper(settings, (loaded, total) =>
       onProgress(0, total ? `Mengunduh model ${Math.round((loaded / total) * 100)}% (sekali saja)` : "Mengunduh model…"),
     );
   }
+  // The cloud detects the language of every request itself, so it takes longer windows (fewer requests).
+  const maxSec = route === "cloud" ? 28 : windowSec(settings);
   const lang = LanguageTracker.for(settings, language);
   const failures: string[] = [];
   for (let i = 0; i < sources.length; i++) {
@@ -403,16 +448,17 @@ export async function transcribeTracks({ audio, settings, dictionary, speakerFor
             continue;
           }
           const sub = piece.pcm.subarray(s0, s1);
-          const windows = speechWindows(sub, windowSec(settings));
+          const windows = speechWindows(sub, maxSec);
           let done = a;
           for (const w of windows) {
             const at = a + w.start / SAMPLE_RATE;
             const end = a + w.end / SAMPLE_RATE;
-            const chunks = await lang.transcribe(sub.slice(w.start, w.end));
+            const r = await transcribeWindow(sub.slice(w.start, w.end), lang, settings, dictionary, route);
             if (lang.main) onLanguage?.(lang.main);
-            await onWindow(key, toSegments(chunks, at, channel, label, dictionary), [done, end]);
+            await onWindow(key, toSegments(r.chunks, at, channel, label, dictionary), [done, end]);
             done = end;
-            onProgress(base + span * piece.fraction(w.end / sub.length, s0, s1), `Mentranskrip ${name} · menit ke-${formatSpan(end)}`);
+            const where = r.route === "cloud" ? " (cloud)" : "";
+            onProgress(base + span * piece.fraction(w.end / sub.length, s0, s1), `Mentranskrip ${name}${where} · menit ke-${formatSpan(end)}`);
           }
           await onWindow(key, [], [done, b]);
         }

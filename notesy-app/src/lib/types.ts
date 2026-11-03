@@ -181,6 +181,10 @@ export interface Settings {
   whisperDevice: "auto" | "webgpu" | "wasm";
   /** Transcribe on the device while recording, instead of only after the meeting. */
   liveTranscribe: boolean;
+  /** Groq Whisper through the Notesy server: never, when the device falls behind or after the meeting, or always. */
+  sttCloud: "off" | "auto" | "always";
+  /** Passcode for the Notesy server; empty reuses the AI passcode. */
+  cloudPasscode: string;
   sttApiBase: string;
   sttApiKey: string;
   sttApiModel: string;

@@ -3,12 +3,24 @@ import { Download, Loader2 } from "lucide-react";
 import { useSettings } from "../../lib/settings";
 import { STT_LANGUAGES, WHISPER_MODELS, prepareWhisper } from "../../lib/stt";
 import { hasWebGPU } from "../../lib/platform";
+import { cloudPass, testCloud } from "../../lib/stt/cloud";
 import { errorMessage } from "../../lib/util";
 import { Card, Field } from "./Field";
 
 export function TranscriptionSettings() {
   const [s, set] = useSettings();
   const [dl, setDl] = useState<string | null>(null);
+  const [cloud, setCloud] = useState<string | null>(null);
+
+  const checkCloud = async () => {
+    if (!cloudPass(s)) return setCloud("Isi kode akses Notesy dulu.");
+    setCloud("Memeriksa…");
+    try {
+      setCloud(`Tersambung (${await testCloud(s)})`);
+    } catch (e) {
+      setCloud(`Gagal: ${errorMessage(e)}`);
+    }
+  };
 
   const preload = async () => {
     setDl("Menyiapkan…");
@@ -76,6 +88,29 @@ export function TranscriptionSettings() {
               <input type="checkbox" checked={s.liveTranscribe} onChange={(e) => set({ liveTranscribe: e.target.checked })} /> Aktif
             </label>
           </Field>
+          <Field
+            label="Bantuan cloud (Groq Whisper Large v3 Turbo)"
+            hint="Otomatis: selama rapat tetap di perangkat, tetapi pindah ke cloud bila laptop tertinggal atau tidak punya WebGPU; rekaman yang diproses setelah rapat dikirim ke cloud agar selesai dalam hitungan menit. Audio dikirim lewat server Notesy ke Groq."
+          >
+            <div className="segmented">
+              {(["off", "auto", "always"] as const).map((v) => (
+                <button key={v} className={s.sttCloud === v ? "active" : ""} onClick={() => set({ sttCloud: v })}>
+                  {v === "off" ? "Mati" : v === "auto" ? "Otomatis" : "Selalu"}
+                </button>
+              ))}
+            </div>
+          </Field>
+          {s.sttCloud !== "off" && (
+            <Field label="Kode akses Notesy" hint="Kosongkan jika sama dengan kode akses yang dipakai untuk AI (Cursor).">
+              <div className="row">
+                <input type="password" value={s.cloudPasscode} onChange={(e) => set({ cloudPasscode: e.target.value })} autoComplete="off" placeholder={cloudPass(s) ? "Memakai kode akses AI" : "Kode akses"} />
+                <button className="btn" onClick={checkCloud} disabled={cloud === "Memeriksa…"}>
+                  Tes
+                </button>
+              </div>
+              {cloud && <small>{cloud}</small>}
+            </Field>
+          )}
           <Field label="Unduh model sekarang" hint="Agar rapat pertama langsung bisa ditranskrip, termasuk saat offline.">
             <button className="btn" onClick={preload} disabled={!!dl && dl.startsWith("Mengunduh")}>
               {dl?.startsWith("Mengunduh") || dl === "Menyiapkan…" ? <Loader2 size={14} className="spin" /> : <Download size={14} />}

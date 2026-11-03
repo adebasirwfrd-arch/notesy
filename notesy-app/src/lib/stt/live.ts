@@ -1,13 +1,15 @@
 import type { Channel, DictionaryEntry, Settings } from "../types";
 import { SAMPLE_RATE, hasSpeech, peakRms, quietCut } from "./audio";
-import { LanguageTracker, prepareWhisper, toSegments, windowSec } from "./index";
+import { LanguageTracker, liveRoute, prepareWhisper, toSegments, transcribeWindow, windowSec, type Route } from "./index";
 import { TranscriptWriter } from "./writer";
+import { cloudEnabled } from "./cloud";
 import { assetUrl } from "../platform";
 
 /** Speech waiting for Whisper beyond this is left to the post-meeting pass instead of piling up in memory. */
 const MAX_BACKLOG_SEC = 600;
 /** Pieces shorter than this at a pause or stop carry no words worth a Whisper call. */
 const MIN_WINDOW_SEC = 1;
+const CLOUD_WINDOW_SEC = 30;
 
 interface Pending {
   channel: Channel;
@@ -77,6 +79,8 @@ export class LiveTranscriber {
   private readonly lang: LanguageTracker;
   private readonly writer: TranscriptWriter;
   private readonly model: Promise<unknown>;
+  /** Longest window cut from live audio; cloud-only meetings use long windows to save requests. */
+  private readonly tapSec: number;
 
   constructor(
     noteId: string,
@@ -87,10 +91,14 @@ export class LiveTranscriber {
   ) {
     this.lang = LanguageTracker.for(settings);
     this.writer = new TranscriptWriter(noteId);
-    this.model = prepareWhisper(settings).catch((e) => {
-      console.warn("live transcription unavailable", e);
-      this.broken = true;
-    });
+    const cloudOnly = settings.sttCloud === "always" && cloudEnabled(settings);
+    this.tapSec = cloudOnly ? CLOUD_WINDOW_SEC - 2 : windowSec(settings);
+    this.model = cloudOnly
+      ? Promise.resolve()
+      : prepareWhisper(settings).catch((e) => {
+          console.warn("local live transcription unavailable", e);
+          this.broken = true;
+        });
   }
 
   private context() {
@@ -120,7 +128,7 @@ export class LiveTranscriber {
       const tap = new ChannelTap(channel, [src, node, mute]);
       node.port.onmessage = (e: MessageEvent<Float32Array>) => {
         if (this.paused || this.stopped || this.taps.get(channel) !== tap) return;
-        tap.push(e.data, this.clockMs() / 1000, (start, pcm) => this.enqueue(tap, start, pcm), windowSec(this.settings));
+        tap.push(e.data, this.clockMs() / 1000, (start, pcm) => this.enqueue(tap, start, pcm), this.tapSec);
       };
       this.taps.set(channel, tap);
     } catch (e) {
@@ -157,20 +165,20 @@ export class LiveTranscriber {
       this.writer.add(tap.channel, [], [startSec, endSec]);
       return;
     }
-    if (this.broken || this.queuedSec > MAX_BACKLOG_SEC) return;
+    if ((this.broken && !cloudEnabled(this.settings)) || this.queuedSec > MAX_BACKLOG_SEC) return;
     this.queue.push({ channel: tap.channel, startSec, pcm });
     this.queuedSec += pcm.length / SAMPLE_RATE;
     if (!this.busy) this.busy = this.work().finally(() => (this.busy = null));
   }
 
   private async work() {
-    await this.model;
     while (this.queue.length) {
-      const item = this.queue.shift()!;
-      this.queuedSec -= item.pcm.length / SAMPLE_RATE;
-      if (this.broken) continue;
+      const route: Route = this.broken ? "cloud" : liveRoute(this.settings, this.queuedSec);
+      if (route === "local") await this.model;
+      const item = route === "cloud" ? this.takeJoined() : this.queue.shift()!;
+      this.queuedSec = Math.max(0, this.queuedSec - item.pcm.length / SAMPLE_RATE);
       try {
-        const chunks = await this.lang.transcribe(item.pcm);
+        const { chunks } = await transcribeWindow(item.pcm, this.lang, this.settings, this.dictionary, route);
         if (this.lang.main) this.writer.setLanguage(this.lang.main);
         const segments = toSegments(chunks, item.startSec, item.channel, this.speakerFor(item.channel), this.dictionary);
         this.writer.add(item.channel, segments, [item.startSec, item.startSec + item.pcm.length / SAMPLE_RATE]);
@@ -179,6 +187,35 @@ export class LiveTranscriber {
       }
     }
     this.queuedSec = 0;
+  }
+
+  /** Joins back-to-back windows of one channel up to ~30 s: the cloud is billed and rate-limited per request. */
+  private takeJoined(): Pending {
+    const first = this.queue.shift()!;
+    const parts = [first.pcm];
+    let end = first.startSec + first.pcm.length / SAMPLE_RATE;
+    let len = first.pcm.length;
+    for (let i = 0; i < this.queue.length; ) {
+      const next = this.queue[i];
+      if (next.channel !== first.channel) {
+        i++;
+        continue;
+      }
+      if (Math.abs(next.startSec - end) > 0.5 || len + next.pcm.length > CLOUD_WINDOW_SEC * SAMPLE_RATE) break;
+      this.queue.splice(i, 1);
+      this.queuedSec = Math.max(0, this.queuedSec - next.pcm.length / SAMPLE_RATE);
+      parts.push(next.pcm);
+      len += next.pcm.length;
+      end = next.startSec + next.pcm.length / SAMPLE_RATE;
+    }
+    if (parts.length === 1) return first;
+    const pcm = new Float32Array(len);
+    let o = 0;
+    for (const p of parts) {
+      pcm.set(p, o);
+      o += p.length;
+    }
+    return { channel: first.channel, startSec: first.startSec, pcm };
   }
 
   /** Stops listening, then waits until queued speech is transcribed and saved. */
