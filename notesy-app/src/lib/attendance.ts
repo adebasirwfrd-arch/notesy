@@ -46,7 +46,9 @@ export async function newAttendance(): Promise<MomAttendance> {
   return { id: await idFor(key), key, createdAt: Date.now() };
 }
 
-export const attendanceUrl = (id: string) => `${attendanceOrigin()}/absen?i=${id}`;
+/** The attendee form lives on its own small site (repo "bridge"), which forwards sign-ins to this server. */
+const FORM_ORIGIN = "https://absen-mom.vercel.app";
+export const attendanceUrl = (id: string) => `${FORM_ORIGIN}/?i=${id}`;
 export const attendanceOpen = (a: MomAttendance) => Date.now() - a.createdAt < OPEN_FOR_MS;
 
 async function api(query: string, init?: RequestInit) {
