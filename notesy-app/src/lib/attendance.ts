@@ -107,7 +107,6 @@ export function mergeEntries(mom: Mom, entries: AttendanceEntry[]) {
     const match = mom.attendees.find((a) => !a.source && norm(a.name) === norm(e.name));
     if (match) {
       match.source = e.id;
-      match.name = e.name;
       if (e.company) match.company = e.company;
       if (e.empNo) match.empNo = e.empNo;
       if (e.title) match.title = e.title;
@@ -225,13 +224,19 @@ export async function qrCard(info: AttendanceInfo, url: string): Promise<Blob> {
   ctx.textBaseline = "middle";
   ctx.fillText(badge, W / 2, 103);
 
-  ctx.font = font(900, 62);
   ctx.fillStyle = "#ffffff";
-  const titleLines = wrapLines(ctx, info.title.toUpperCase(), W - 140, 3);
+  ctx.font = font(900, 62);
+  let titleSize = 62;
+  let titleLines = wrapLines(ctx, info.title.toUpperCase(), W - 140, 3);
+  if (titleLines[titleLines.length - 1]?.endsWith("…")) {
+    titleSize = 50;
+    ctx.font = font(900, titleSize);
+    titleLines = wrapLines(ctx, info.title.toUpperCase(), W - 140, 4);
+  }
   let y = 200;
   for (const l of titleLines) {
-    ctx.fillText(l, W / 2, y + 34);
-    y += 76;
+    ctx.fillText(l, W / 2, y + titleSize * 0.55);
+    y += titleSize * 1.22;
   }
 
   const chips = [info.date, info.location].filter(Boolean).join("   •   ");
