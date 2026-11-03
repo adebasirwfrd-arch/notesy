@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Copy, Download, FileAudio, RefreshCw, Search } from "lucide-react";
-import { useBlobUrl } from "../../lib/hooks";
+import { usePlayableAudio } from "../../lib/hooks";
 import { updateNote } from "../../lib/db";
 import { isProcessing, processNote } from "../../lib/session";
 import { speakerName } from "../../lib/ai/prompts";
@@ -14,7 +14,7 @@ const COLORS = ["#2563eb", "#db2777", "#059669", "#d97706", "#7c3aed", "#0891b2"
 
 export function TranscriptTab({ note, isLive }: { note: Note; isLive: boolean }) {
   const track = note.audio.find((a) => a.channel === "mix") ?? note.audio[0];
-  const url = useBlobUrl(track?.blobKey);
+  const url = usePlayableAudio(track?.blobKey)?.url;
   const audio = useRef<HTMLAudioElement>(null);
   const [time, setTime] = useState(0);
   const [q, setQ] = useState("");

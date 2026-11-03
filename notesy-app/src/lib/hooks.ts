@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { getBlob, getNote, listNotes, listSlides, subscribe } from "./db";
 import { workerInterval } from "./ticker";
+import { hasWebmHeader, repairHeaderlessWebm } from "./stt/webm";
 import type { Note, Slide } from "./types";
 
 export function useNotes() {
@@ -48,6 +49,41 @@ export function useSlides(noteId: string | null) {
     };
   }, [noteId]);
   return slides;
+}
+
+/**
+ * Object URL for recorded audio that browsers can play. Recordings that lost their first chunk get a rebuilt header;
+ * their clusters keep the original timecodes, so player time is still meeting time (`startSec` is where audio begins).
+ */
+export function usePlayableAudio(key: string | null | undefined) {
+  const [state, setState] = useState<{ url: string; startSec: number } | null>(null);
+  useEffect(() => {
+    if (!key) return setState(null);
+    let created: string | null = null;
+    let alive = true;
+    void (async () => {
+      const b = await getBlob(key);
+      if (!alive || !b) return;
+      const head = new Uint8Array(await b.slice(0, 4).arrayBuffer());
+      let blob: Blob = b;
+      let startSec = 0;
+      if (!hasWebmHeader(head) && !b.type.includes("mp4")) {
+        const repaired = repairHeaderlessWebm(new Uint8Array(await b.arrayBuffer()));
+        if (repaired) {
+          blob = new Blob([repaired.bytes as BlobPart], { type: "audio/webm" });
+          startSec = repaired.startSec;
+        }
+      }
+      if (!alive) return;
+      created = URL.createObjectURL(blob);
+      setState({ url: created, startSec });
+    })();
+    return () => {
+      alive = false;
+      if (created) URL.revokeObjectURL(created);
+    };
+  }, [key]);
+  return state;
 }
 
 export function useBlobUrl(key: string | null | undefined) {

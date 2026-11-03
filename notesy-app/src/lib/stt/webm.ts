@@ -39,7 +39,7 @@ const float64 = (id: number[], v: number) => {
   return el(id, [...b]);
 };
 
-function header(track: number, channels: number) {
+function header(track: number, channels: number, durationMs?: number) {
   const opusHead = [...new TextEncoder().encode("OpusHead"), 1, channels, 0x38, 0x01, 0x80, 0xbb, 0, 0, 0, 0, 0];
   const ebml = el(EBML_MAGIC, [
     ...uint([0x42, 0x86], 1),
@@ -50,7 +50,12 @@ function header(track: number, channels: number) {
     ...uint([0x42, 0x87], 4),
     ...uint([0x42, 0x85], 2),
   ]);
-  const info = el([0x15, 0x49, 0xa9, 0x66], [...uint([0x2a, 0xd7, 0xb1], 1_000_000), ...str([0x4d, 0x80], "notesy"), ...str([0x57, 0x41], "notesy")]);
+  const info = el([0x15, 0x49, 0xa9, 0x66], [
+    ...uint([0x2a, 0xd7, 0xb1], 1_000_000),
+    ...(durationMs ? float64([0x44, 0x89], durationMs) : []),
+    ...str([0x4d, 0x80], "notesy"),
+    ...str([0x57, 0x41], "notesy"),
+  ]);
   const entry = el(
     [0xae],
     [
@@ -125,7 +130,7 @@ export function indexWebm(data: Uint8Array): WebmIndex | null {
   return { header, clusters };
 }
 
-const headerFor = (track: number) => header(track, 2);
+const headerFor = (track: number, durationMs?: number) => header(track, 2, durationMs);
 
 /** Returns the repaired file and where in the recording its audio starts, or null when no cluster can be found. */
 export function repairHeaderlessWebm(data: Uint8Array): { bytes: Uint8Array; startSec: number } | null {
@@ -133,7 +138,9 @@ export function repairHeaderlessWebm(data: Uint8Array): { bytes: Uint8Array; sta
   const at = indexOf(data, CLUSTER);
   if (at < 0) return null;
   const c = readCluster(data, at);
-  const head = headerFor(c?.track ?? 1);
+  // Without a duration players show an endless timeline; the last cluster start is within ~30 s of the end.
+  const last = indexWebm(data)?.clusters.at(-1)?.sec;
+  const head = headerFor(c?.track ?? 1, last ? (last + 15) * 1000 : undefined);
   const out = new Uint8Array(head.length + data.length - at);
   out.set(head, 0);
   out.set(data.subarray(at), head.length);
