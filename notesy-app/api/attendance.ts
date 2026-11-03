@@ -156,6 +156,7 @@ export async function POST(req: Request) {
       return reply(200, { ok: true, id: entry.id });
     } catch (e) {
       const conflict = e instanceof BlobPreconditionFailedError || /already exists|precondition/i.test(String((e as Error)?.message));
+      console.warn("attendance write conflict", attempt, (e as Error)?.name, (e as Error)?.message);
       if (!conflict) throw e;
       await new Promise((r) => setTimeout(r, 80 + Math.random() * 220 * (attempt + 1)));
     }
