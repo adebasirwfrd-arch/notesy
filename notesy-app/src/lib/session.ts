@@ -104,6 +104,19 @@ export async function startRecording(mode: CaptureMode, existingNoteId?: string)
   }
   recorder = rec;
   rec.onScreenEnded = (surface) => void onScreenEnded(surface);
+  rec.onSystemAudioLost = () => {
+    logEvent("Audio peserta terputus (perangkat audio berganti)");
+    raiseAlert(AUDIO_LOST);
+    patch({ hasSystemAudio: false });
+  };
+  rec.onMicLost = () => {
+    logEvent("Mikrofon terputus, menyambung ulang otomatis");
+    patch({ hasMic: false, warnings: addWarning(MIC_LOST) });
+  };
+  rec.onMicRestored = () => {
+    logEvent("Mikrofon tersambung lagi");
+    patch({ hasMic: true, micMuted: false, warnings: (live?.warnings ?? []).filter((w) => w !== MIC_LOST) });
+  };
   if (mode === "screen" && "Notification" in window && Notification.permission === "default") void Notification.requestPermission().catch(() => {});
   const startedAt = Date.now();
   await updateNote(noteId, (n) => {
@@ -152,8 +165,20 @@ function logEvent(text: string) {
 }
 
 const SURFACE_NAME: Record<string, string> = { browser: "tab", window: "jendela", monitor: "layar" };
-const SCREEN_LOST =
+export const SCREEN_LOST =
   "Berbagi layar berhenti, tetapi rekaman tetap berjalan. Klik “Bagikan ulang” agar audio peserta dan slide terekam lagi.";
+export const AUDIO_LOST =
+  "Audio peserta terputus (perangkat audio berganti, misalnya karena panggilan masuk). Rekaman tetap berjalan. Klik “Bagikan ulang” untuk menyambungkannya lagi.";
+const MIC_LOST = "Mikrofon terputus. Notesy menyambungkannya lagi secara otomatis.";
+const ALERTS = [SCREEN_LOST, AUDIO_LOST];
+
+const addWarning = (w: string) => [...(live?.warnings ?? []).filter((x) => x !== w), w];
+
+function raiseAlert(text: string) {
+  if (!live) return;
+  patch({ screenLost: true, warnings: [...live.warnings.filter((w) => !ALERTS.includes(w)), text] });
+  notifyScreenLost();
+}
 
 /** Chrome ends the share when the shared tab/window closes or reloads, Zoom swaps windows, or “Stop sharing” is clicked. */
 async function onScreenEnded(surface: string | undefined) {
@@ -161,8 +186,8 @@ async function onScreenEnded(surface: string | undefined) {
   watcher = null;
   if (!live || !recorder) return;
   logEvent(`Berbagi ${SURFACE_NAME[surface ?? ""] ?? "layar"} diakhiri oleh browser`);
-  patch({ screenLost: true, hasSystemAudio: false, warnings: [...live.warnings.filter((w) => w !== SCREEN_LOST), SCREEN_LOST] });
-  notifyScreenLost();
+  raiseAlert(SCREEN_LOST);
+  patch({ hasSystemAudio: false });
 }
 
 function notifyScreenLost() {
@@ -194,7 +219,7 @@ export async function reshareScreen() {
   patch({
     screenLost: false,
     hasSystemAudio: recorder.hasSystemAudio,
-    warnings: live.warnings.filter((w) => w !== SCREEN_LOST),
+    warnings: live.warnings.filter((w) => !ALERTS.includes(w)),
   });
 }
 

@@ -79,6 +79,8 @@ export class MeetingRecorder {
   private recorders: Partial<Record<Channel | "mix", ChannelRecorder>> = {};
   private systemParts: { rec: ChannelRecorder; offsetMs: number }[] = [];
   private systemSource: MediaStreamAudioSourceNode | null = null;
+  private micParts: { rec: ChannelRecorder; offsetMs: number }[] = [];
+  private micSource: MediaStreamAudioSourceNode | null = null;
   private mix: MediaStreamAudioDestinationNode | null = null;
   private mime = "";
   private startedAt = 0;
@@ -89,6 +91,9 @@ export class MeetingRecorder {
   warnings: string[] = [];
   /** Fires when the browser ends the screen share; audio keeps recording until stop(). */
   onScreenEnded?: (surface: string | undefined) => void;
+  onSystemAudioLost?: () => void;
+  onMicLost?: () => void;
+  onMicRestored?: () => void;
 
   constructor(readonly opts: RecorderOptions) {}
 
@@ -106,7 +111,7 @@ export class MeetingRecorder {
   }
 
   async start() {
-    const { mode, micDeviceId, echoCancellation = true } = this.opts;
+    const { mode } = this.opts;
     if (mode === "screen") {
       this.display = await navigator.mediaDevices.getDisplayMedia(DISPLAY_OPTIONS);
       if (!this.hasSystemAudio) {
@@ -116,15 +121,7 @@ export class MeetingRecorder {
       }
     }
     try {
-      this.mic = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          deviceId: micDeviceId ? { exact: micDeviceId } : undefined,
-          echoCancellation,
-          noiseSuppression: true,
-          autoGainControl: true,
-          channelCount: 1,
-        },
-      });
+      this.mic = await this.openMic();
     } catch (e) {
       if (mode === "mic") {
         this.stopTracks();
@@ -139,22 +136,92 @@ export class MeetingRecorder {
 
     this.ctx = new AudioContext();
     if (this.ctx.state === "suspended") await this.ctx.resume().catch(() => {});
+    // Calls and device switches can suspend the context, which would silence the mix track.
+    this.ctx.onstatechange = () => {
+      if (this.ctx && this.ctx.state !== "running" && this.ctx.state !== "closed" && this.state !== "stopped") void this.ctx.resume().catch(() => {});
+    };
     this.mix = this.ctx.createMediaStreamDestination();
     this.mime = pickMime();
     const { noteId } = this.opts;
 
-    if (this.mic) {
-      const src = this.ctx.createMediaStreamSource(this.mic);
-      this.analysers.mic = this.analyser(src);
-      src.connect(this.mix);
-      this.recorders.mic = new ChannelRecorder(sessionKey(noteId, "mic"), this.mic, this.mime, 32000);
-    }
     this.recorders.mix = new ChannelRecorder(sessionKey(noteId, "mix"), this.mix.stream, this.mime, 64000);
-    Object.values(this.recorders).forEach((r) => r!.start());
+    this.recorders.mix.start();
     this.startedAt = performance.now();
     this.state = "recording";
+    if (this.mic) this.attachMic(this.mic);
     if (this.display) this.attachDisplay(this.display);
+    navigator.mediaDevices.addEventListener("devicechange", this.onDeviceChange);
   }
+
+  private openMic() {
+    const { micDeviceId, echoCancellation = true } = this.opts;
+    const audio = (deviceId?: string): MediaTrackConstraints => ({
+      deviceId: deviceId ? { exact: deviceId } : undefined,
+      echoCancellation,
+      noiseSuppression: true,
+      autoGainControl: true,
+      channelCount: 1,
+    });
+    return navigator.mediaDevices
+      .getUserMedia({ audio: audio(micDeviceId) })
+      .catch((e) => (micDeviceId ? navigator.mediaDevices.getUserMedia({ audio: audio() }) : Promise.reject(e)));
+  }
+
+  private attachMic(stream: MediaStream) {
+    if (!this.ctx || !this.mix) return;
+    this.mic = stream;
+    const track = stream.getAudioTracks()[0];
+    track?.addEventListener("ended", () => void this.detachMic(stream));
+    const src = this.ctx.createMediaStreamSource(stream);
+    this.analysers.mic = this.analyser(src);
+    src.connect(this.mix);
+    this.micSource = src;
+    const elapsed = this.elapsed();
+    const offsetMs = elapsed < 1000 ? 0 : elapsed;
+    const rec = new ChannelRecorder(sessionKey(this.opts.noteId, "mic", offsetMs), stream, this.mime, 32000);
+    rec.start();
+    if (this.state === "paused") rec.pause();
+    this.micParts.push({ rec, offsetMs });
+  }
+
+  /** The OS ends the mic track when a call grabs the device or a headset switches profile; reconnect until stop(). */
+  private async detachMic(stream: MediaStream) {
+    if (this.mic !== stream || this.state === "stopped") return;
+    this.mic = null;
+    this.micSource?.disconnect();
+    this.micSource = null;
+    delete this.analysers.mic;
+    stream.getTracks().forEach((t) => t.stop());
+    await this.micParts.at(-1)?.rec.stop();
+    this.onMicLost?.();
+    this.scheduleMicRetry(0);
+  }
+
+  private micRetry: ReturnType<typeof setTimeout> | null = null;
+
+  private scheduleMicRetry(delayMs = 2000) {
+    if (this.micRetry || this.mic || this.state === "stopped") return;
+    this.micRetry = setTimeout(async () => {
+      this.micRetry = null;
+      if (this.mic || this.state === "stopped") return;
+      try {
+        const stream = await this.openMic();
+        if ((this.state as MeetingRecorder["state"]) === "stopped") return stream.getTracks().forEach((t) => t.stop());
+        this.attachMic(stream);
+        this.onMicRestored?.();
+      } catch {
+        this.scheduleMicRetry();
+      }
+    }, delayMs);
+  }
+
+  private onDeviceChange = () => {
+    if (!this.mic && this.state !== "stopped" && this.micParts.length) {
+      if (this.micRetry) clearTimeout(this.micRetry);
+      this.micRetry = null;
+      this.scheduleMicRetry(300);
+    }
+  };
 
   private analyser(src: AudioNode) {
     const an = this.ctx!.createAnalyser();
@@ -168,6 +235,7 @@ export class MeetingRecorder {
     const video = display.getVideoTracks()[0];
     video?.addEventListener("ended", () => void this.detachDisplay(display));
     if (!display.getAudioTracks().length || !this.ctx || !this.mix) return;
+    display.getAudioTracks()[0].addEventListener("ended", () => void this.detachSystemAudio(display));
     const stream = new MediaStream(display.getAudioTracks());
     const src = this.ctx.createMediaStreamSource(stream);
     this.analysers.system = this.analyser(src);
@@ -181,15 +249,27 @@ export class MeetingRecorder {
     this.systemParts.push({ rec, offsetMs });
   }
 
+  private async stopSystemPart() {
+    if (!this.systemSource) return;
+    this.systemSource.disconnect();
+    this.systemSource = null;
+    delete this.analysers.system;
+    await this.systemParts.at(-1)?.rec.stop();
+  }
+
+  /** System audio can drop on its own (output device switched by a call) while the video keeps going. */
+  private async detachSystemAudio(display: MediaStream) {
+    if (this.display !== display || this.state === "stopped" || !this.systemSource) return;
+    await this.stopSystemPart();
+    if (this.display === display && display.getVideoTracks().some((t) => t.readyState === "live")) this.onSystemAudioLost?.();
+  }
+
   private async detachDisplay(display: MediaStream) {
     if (this.display !== display || this.state === "stopped") return;
     const surface = this.displaySurface;
     this.display = null;
-    this.systemSource?.disconnect();
-    this.systemSource = null;
-    delete this.analysers.system;
+    await this.stopSystemPart();
     display.getTracks().forEach((t) => t.stop());
-    await this.systemParts.at(-1)?.rec.stop();
     this.onScreenEnded?.(surface);
   }
 
@@ -241,7 +321,7 @@ export class MeetingRecorder {
   }
 
   private allRecorders() {
-    return [...(Object.values(this.recorders) as ChannelRecorder[]), ...this.systemParts.map((p) => p.rec)];
+    return [...(Object.values(this.recorders) as ChannelRecorder[]), ...this.micParts.map((p) => p.rec), ...this.systemParts.map((p) => p.rec)];
   }
 
   private stopTracks() {
@@ -254,12 +334,15 @@ export class MeetingRecorder {
     const durationMs = this.elapsed();
     if (this.state === "paused") this.resume();
     this.state = "stopped";
+    navigator.mediaDevices.removeEventListener("devicechange", this.onDeviceChange);
+    if (this.micRetry) clearTimeout(this.micRetry);
     await Promise.all(this.allRecorders().map((r) => r.stop()));
     this.stopTracks();
     await this.ctx?.close().catch(() => {});
     const { noteId } = this.opts;
     const tracks = await finalizeTracks([
       ...(Object.entries(this.recorders) as [Channel | "mix", ChannelRecorder][]).map(([ch, r]) => ({ session: sessionKey(noteId, ch), mime: r.mime })),
+      ...this.micParts.map((p) => ({ session: sessionKey(noteId, "mic", p.offsetMs), mime: p.rec.mime })),
       ...this.systemParts.map((p) => ({ session: sessionKey(noteId, "system", p.offsetMs), mime: p.rec.mime })),
     ]);
     return { tracks, durationMs };

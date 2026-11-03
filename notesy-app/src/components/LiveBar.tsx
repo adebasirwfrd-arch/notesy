@@ -1,6 +1,8 @@
 import { useRef, useState } from "react";
 import { Camera, Mic, MicOff, MonitorUp, Pause, Play, PictureInPicture2, Square, Wand2 } from "lucide-react";
 import {
+  AUDIO_LOST,
+  SCREEN_LOST,
   captureSlideNow,
   getElapsed,
   getLevels,
@@ -142,12 +144,15 @@ export function LiveBar({ live }: { live: LiveSession }) {
   return (
     <div className="live-bar">
       <LiveControls live={live} />
-      {live.warnings.map((w) => (
-        <p key={w} className={`live-warning${live.screenLost && w.startsWith("Berbagi layar berhenti") ? " live-alert" : ""}`}>
-          {w}
-          {live.screenLost && w.startsWith("Berbagi layar berhenti") && <ReshareButton small />}
-        </p>
-      ))}
+      {live.warnings.map((w) => {
+        const alert = live.screenLost && (w === SCREEN_LOST || w === AUDIO_LOST);
+        return (
+          <p key={w} className={`live-warning${alert ? " live-alert" : ""}`}>
+            {w}
+            {alert && <ReshareButton small />}
+          </p>
+        );
+      })}
     </div>
   );
 }
