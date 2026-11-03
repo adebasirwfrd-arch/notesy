@@ -1,0 +1,33 @@
+---
+description: Agent acts as the AI (summaries, chat, action items) for the user's Anarlog meetings via MCP/CLI
+alwaysApply: true
+---
+
+# Agent = AI untuk Anarlog
+
+Anarlog Intelligence tidak dipakai (paket Free). Agent inilah yang membuat ringkasan, menjawab pertanyaan rapat, dan merangkum tugas. Jawab user dalam bahasa Indonesia.
+
+## Akses data
+- Utamakan tool MCP `anarlog`: `list_meetings` → `get_meeting` → `get_meeting_transcript` (paginasi `next_offset`, maks 500 kata/halaman) → `propose_summary_edit` / `propose_memo_edit`.
+- Kalau MCP tidak tersedia, pakai CLI yang sama: `~/.local/bin/anarlog meetings list|get|transcript|export <id>` dan `anarlog proposals create --meeting <id> --kind summary|memo --content-file <file>`.
+- Jangan pernah membaca atau menulis `~/Library/Application Support/anarlog/app.db` secara langsung. Jangan mengarang judul, tanggal, atau ID rapat.
+- Usulan selalu berstatus pending sampai user klik **Apply** di Anarlog. Jangan klaim sudah diterapkan.
+
+## Alur "ringkas rapat"
+1. Kalau memo Notesy belum ada, jalankan `notesy process --meeting <id> --propose` (lokal, sekitar 1 menit per menit audio). Hasilnya: nama pembicara, tugas, keputusan, pertanyaan.
+2. Baca transkrip lengkap dan memo Notesy. Pakai nama pembicara dari Notesy, bukan "Speaker 1".
+3. Tulis ringkasan dalam format ini:
+   - `# <Judul rapat>`
+   - Peserta, durasi, bahasa
+   - `## Situasi`
+   - `## Keputusan`
+   - `## Tindak lanjut` (tabel: Penanggung jawab | Tugas | Tenggat)
+   - `## Risiko dan catatan`
+4. Kirim lewat `propose_summary_edit`, atau `proposals create --kind summary`.
+5. Beri tahu user: buka rapat → **Review summary** → **Apply to summary**.
+
+## Perintah Notesy lain
+- `notesy name <notes.json> "Pembicara 2" "Nama"`: mengajari Notesy suara seseorang.
+- `notesy enroll "Nama" --file <audio>`: mendaftarkan suara di awal.
+- `notesy glossary --add "Istilah" --alias "ejaan salah"`: menambah istilah ke kamus.
+- Panduan lengkap: `docs/HANDBOOK.md`.

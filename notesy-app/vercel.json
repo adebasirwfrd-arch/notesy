@@ -1,0 +1,24 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "vite",
+  "installCommand": "pnpm install --frozen-lockfile",
+  "buildCommand": "pnpm build",
+  "outputDirectory": "dist",
+  "rewrites": [
+    {
+      "source": "/cursor-api/:path*",
+      "has": [{ "type": "header", "key": "x-notesy-pass" }],
+      "destination": "/api/cursor?path=:path*"
+    },
+    { "source": "/cursor-api/:path*", "destination": "https://api.cursor.com/:path*" }
+  ],
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        { "key": "Permissions-Policy", "value": "display-capture=(self), microphone=(self)" },
+        { "key": "X-Content-Type-Options", "value": "nosniff" }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+[project]
+name = "notesy"
+version = "0.1.0"
+description = "Local companion for Anarlog: dictation, speaker identification, custom glossary, smart notes"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "mlx-whisper>=0.4.3",
+    "sherpa-onnx>=2.0.1",
+    "numpy",
+    "soundfile",
+    "sounddevice",
+    "rumps",
+    "pynput",
+    "rapidfuzz",
+    "pyyaml",
+]
+
+[project.scripts]
+notesy = "notesy.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

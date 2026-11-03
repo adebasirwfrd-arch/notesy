@@ -1,0 +1,30 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+
+# Generated test artifacts (audio, voiceprints, meeting notes)
+tests/output/
+
+# Web app
+node_modules/
+notesy-app/dist/
+notesy-app/dist-ext/
+notesy-app/dist-android/
+notesy-app/public/ort/
+notesy-app/*.zip
+notesy-app/android/app/build/
+notesy-app/android/build/
+notesy-app/android/.gradle/
+notesy-app/android/local.properties
+notesy-app/android/app/src/main/assets/public/
+*.apk
+.vercel/
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+.DS_Store

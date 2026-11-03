@@ -1,0 +1,40 @@
+import { defineConfig, type Plugin } from "vite";
+import react from "@vitejs/plugin-react";
+
+/** The ORT runtime is served from public/ort (wasmPaths is always set), so the bundler's own copy is dead weight. */
+const dropBundledOrtWasm = (): Plugin => ({
+  name: "drop-bundled-ort-wasm",
+  apply: "build",
+  generateBundle(_, bundle) {
+    for (const key of Object.keys(bundle)) {
+      if (/assets\/ort-wasm-simd-threaded.*\.wasm$/.test(key)) delete bundle[key];
+    }
+  },
+});
+
+export default defineConfig(({ mode }) => ({
+  base: "./",
+  plugins: [react(), dropBundledOrtWasm()],
+  define: {
+    __TARGET__: JSON.stringify(mode === "extension" ? "extension" : mode === "android" ? "android" : "web"),
+  },
+  build: {
+    outDir: mode === "extension" ? "dist-ext" : mode === "android" ? "dist-android" : "dist",
+    emptyOutDir: true,
+    target: "es2022",
+    chunkSizeWarningLimit: 4000,
+    modulePreload: { polyfill: false },
+  },
+  worker: { format: "es" },
+  optimizeDeps: { exclude: ["@huggingface/transformers"] },
+  server: {
+    port: 5317,
+    proxy: {
+      "/cursor-api": {
+        target: process.env.CURSOR_API_TARGET ?? "https://api.cursor.com",
+        changeOrigin: true,
+        rewrite: (p) => p.replace(/^\/cursor-api/, ""),
+      },
+    },
+  },
+}));
