@@ -55,10 +55,12 @@ async function idFor(key: string) {
 const text = (v: unknown, max: number) => (typeof v === "string" ? v.replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, max) : "");
 
 async function readJson<T>(pathname: string, ifNoneMatch?: string) {
-  const res = await get(pathname, { access: "private", useCache: false, ifNoneMatch });
+  // Compressed responses carry a weak ETag (W/"…"), which conditional writes reject.
+  const res = await get(pathname, { access: "private", useCache: false, ...(ifNoneMatch ? { ifNoneMatch } : {}), headers: { "accept-encoding": "identity" } });
   if (!res) return null;
-  if (res.statusCode === 304) return { etag: res.blob.etag, value: null as T | null, notModified: true };
-  return { etag: res.blob.etag, value: (await new Response(res.stream).json()) as T, notModified: false };
+  const etag = res.blob.etag.replace(/^W\//, "");
+  if (res.statusCode === 304) return { etag, value: null as T | null, notModified: true };
+  return { etag, value: (await new Response(res.stream).json()) as T, notModified: false };
 }
 
 const write = (pathname: string, value: unknown, ifMatch?: string) =>
