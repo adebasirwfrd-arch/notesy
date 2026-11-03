@@ -1,16 +1,17 @@
-import { BlobPreconditionFailedError, get, put } from "@vercel/blob";
+import { get, list, put } from "@vercel/blob";
 
 /**
  * Online attendance for a meeting, keyed by two secrets:
  * - `key` (organizer only, never leaves the Notesy device that created it) reads the submissions and edits the meeting info;
  * - `id` = hash of `key`, printed in the QR code, lets attendees read the meeting info and sign in.
- * Each session is two private blobs: `att/<id>/meta.json` and `att/<id>/list.json`.
+ * Blobs (all private): `att/<id>/meta.json`, one `att/<id>/sub/<entry>.json` per sign-in (so simultaneous sign-ins never
+ * conflict), and `att/<id>/stamp.json`, rewritten on every sign-in so the organizer can poll with a cheap conditional read.
  */
 
 const ID = /^[A-Za-z0-9_-]{22}$/;
 const KEY = /^[A-Za-z0-9_-]{22,64}$/;
+const ENTRY = /^[a-z0-9]{8,24}$/;
 const OPEN_FOR_MS = 3 * 24 * 60 * 60 * 1000;
-const MAX_ENTRIES = 500;
 const MAX_SIGNATURE = 400_000;
 
 interface Meta {
@@ -55,23 +56,33 @@ async function idFor(key: string) {
 const text = (v: unknown, max: number) => (typeof v === "string" ? v.replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, max) : "");
 
 async function readJson<T>(pathname: string, ifNoneMatch?: string) {
-  // Compressed responses carry a weak ETag (W/"…"), which conditional writes reject.
-  const res = await get(pathname, { access: "private", useCache: false, ...(ifNoneMatch ? { ifNoneMatch } : {}), headers: { "accept-encoding": "identity" } });
+  const res = await get(pathname, { access: "private", useCache: false, ...(ifNoneMatch ? { ifNoneMatch } : {}) });
   if (!res) return null;
   const etag = res.blob.etag.replace(/^W\//, "");
   if (res.statusCode === 304) return { etag, value: null as T | null, notModified: true };
   return { etag, value: (await new Response(res.stream).json()) as T, notModified: false };
 }
 
-const write = (pathname: string, value: unknown, ifMatch?: string) =>
-  put(pathname, JSON.stringify(value), {
-    access: "private",
-    contentType: "application/json",
-    addRandomSuffix: false,
-    allowOverwrite: true,
-    cacheControlMaxAge: 60,
-    ...(ifMatch ? { ifMatch } : {}),
-  });
+const write = (pathname: string, value: unknown, overwrite: boolean) =>
+  put(pathname, JSON.stringify(value), { access: "private", contentType: "application/json", addRandomSuffix: false, allowOverwrite: overwrite, cacheControlMaxAge: 60 });
+
+async function entriesAfter(id: string, after: string) {
+  const prefix = `att/${id}/sub/`;
+  const paths: string[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await list({ prefix, cursor, limit: 1000 });
+    paths.push(...page.blobs.map((b) => b.pathname));
+    cursor = page.hasMore ? page.cursor : undefined;
+  } while (cursor);
+  const fresh = paths.filter((p) => !after || p > `${prefix}${after}.json`).sort();
+  const out: Entry[] = [];
+  for (let i = 0; i < fresh.length; i += 8) {
+    const batch = await Promise.all(fresh.slice(i, i + 8).map((p) => readJson<Entry>(p).catch(() => null)));
+    for (const b of batch) if (b?.value) out.push(b.value);
+  }
+  return { entries: out, ids: new Set(paths.map((p) => p.slice(prefix.length, -5))) };
+}
 
 export function OPTIONS() {
   return new Response(null, { status: 204, headers: CORS });
@@ -82,11 +93,16 @@ export async function GET(req: Request) {
   const key = url.searchParams.get("key");
   if (key) {
     if (!KEY.test(key)) return fail(400, "Kunci absensi tidak valid.");
+    const after = url.searchParams.get("after") ?? "";
+    if (after && !ENTRY.test(after)) return fail(400, "Parameter tidak valid.");
     const id = await idFor(key);
-    const list = await readJson<{ entries: Entry[] }>(`att/${id}/list.json`, req.headers.get("if-none-match") ?? undefined);
-    if (!list) return reply(200, { entries: [] });
-    if (list.notModified) return reply(304, null, { etag: list.etag });
-    return reply(200, { entries: list.value?.entries ?? [] }, { etag: list.etag });
+    const stamp = await readJson<{ last: string }>(`att/${id}/stamp.json`, req.headers.get("if-none-match") ?? undefined);
+    if (!stamp) return reply(200, { entries: [] });
+    if (stamp.notModified) return reply(304, null);
+    const { entries, ids } = await entriesAfter(id, after);
+    // Listing can lag a fresh upload by a moment; without an ETag the client asks again in full next time.
+    const complete = !stamp.value?.last || ids.has(stamp.value.last);
+    return reply(200, { entries }, complete ? { etag: stamp.etag } : {});
   }
   const id = url.searchParams.get("id") ?? "";
   if (!ID.test(id)) return fail(400, "Link absensi tidak valid.");
@@ -112,7 +128,7 @@ export async function PUT(req: Request) {
     expiresAt: now + OPEN_FOR_MS,
   };
   const id = await idFor(key);
-  await write(`att/${id}/meta.json`, meta);
+  await write(`att/${id}/meta.json`, meta, true);
   return reply(200, { id });
 }
 
@@ -125,7 +141,7 @@ export async function POST(req: Request) {
 
   const body = (await req.json().catch(() => null)) as Partial<Entry> | null;
   const entry: Entry = {
-    id: `${Date.now().toString(36)}${crypto.randomUUID().slice(0, 8)}`,
+    id: `${Date.now().toString(36)}${crypto.randomUUID().replace(/-/g, "").slice(0, 8)}`,
     name: text(body?.name, 120),
     empNo: text(body?.empNo, 40),
     title: text(body?.title, 120),
@@ -140,28 +156,8 @@ export async function POST(req: Request) {
   }
   if (meta.needSignature && !entry.signature) return fail(400, "Tanda tangan wajib diisi.");
 
-  // Optimistic concurrency: attendees often submit at the same moment right after the QR is shown.
-  const deadline = Date.now() + 8000;
-  for (let attempt = 0; Date.now() < deadline; attempt++) {
-    const cur = await readJson<{ entries: Entry[] }>(`att/${id}/list.json`);
-    const entries = cur?.value?.entries ?? [];
-    if (entries.length >= MAX_ENTRIES) return fail(429, "Daftar hadir sudah penuh.");
-    try {
-      if (cur) await write(`att/${id}/list.json`, { entries: [...entries, entry] }, cur.etag);
-      else
-        await put(`att/${id}/list.json`, JSON.stringify({ entries: [entry] }), {
-          access: "private",
-          contentType: "application/json",
-          addRandomSuffix: false,
-          allowOverwrite: false,
-          cacheControlMaxAge: 60,
-        });
-      return reply(200, { ok: true, id: entry.id });
-    } catch (e) {
-      const conflict = e instanceof BlobPreconditionFailedError || /already exists|precondition/i.test(String((e as Error)?.message));
-      if (!conflict) throw e;
-      await new Promise((r) => setTimeout(r, 50 + Math.random() * 150 * Math.min(attempt + 1, 4)));
-    }
-  }
-  return fail(503, "Server sedang sibuk. Coba kirim lagi.");
+  await write(`att/${id}/sub/${entry.id}.json`, entry, false);
+  // The sign-in is already stored; a lost stamp only delays the organizer's next refresh.
+  await write(`att/${id}/stamp.json`, { last: entry.id }, true).catch(() => undefined);
+  return reply(200, { ok: true, id: entry.id });
 }

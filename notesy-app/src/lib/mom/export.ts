@@ -13,7 +13,7 @@ export async function momInput(note: Note) {
 
 export async function downloadMom(note: Note, kind: "docx" | "pdf") {
   if (note.mom?.attendance) {
-    if (await syncAttendance(note.id).catch(() => 0)) note = (await getNote(note.id)) ?? note;
+    if (await syncAttendance(note.id, true).catch(() => 0)) note = (await getNote(note.id)) ?? note;
   }
   const input = await momInput(note);
   const name = `MoM - ${safeFileName(note.title)}`;

@@ -159,7 +159,7 @@ export function MomTab({ note, slides }: { note: Note; slides: Slide[] }) {
     setBusy("sync");
     try {
       await write();
-      const n = await syncAttendance(note.id);
+      const n = await syncAttendance(note.id, true);
       toast(n ? `${n} peserta dari QR ditambahkan.` : "Belum ada peserta baru dari QR.", n ? "success" : "info");
     } catch (e) {
       toastError(e);

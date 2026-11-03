@@ -82,13 +82,17 @@ export async function publishAttendance(a: MomAttendance, info: AttendanceInfo) 
 
 const cache = new Map<string, { etag: string; entries: AttendanceEntry[] }>();
 
-export async function fetchAttendance(a: MomAttendance) {
-  const prev = cache.get(a.key);
-  const res = await api(`key=${a.key}`, { headers: prev?.etag ? { "If-None-Match": prev.etag } : {} });
-  if (res.status === 304 && prev) return prev.entries;
+/** Returns every sign-in so far; `force` skips the "nothing changed" shortcut (manual refresh, export). */
+export async function fetchAttendance(a: MomAttendance, force = false) {
+  const prev = cache.get(a.key) ?? { etag: "", entries: [] };
+  const after = prev.entries.reduce((m, e) => (e.id > m ? e.id : m), "");
+  const res = await api(`key=${a.key}${after ? `&after=${after}` : ""}`, { headers: prev.etag && !force ? { "If-None-Match": prev.etag } : {} });
+  if (res.status === 304) return prev.entries;
   const { entries } = (await res.json()) as { entries: AttendanceEntry[] };
-  cache.set(a.key, { etag: res.headers.get("etag") ?? "", entries });
-  return entries;
+  const known = new Set(prev.entries.map((e) => e.id));
+  const next = { etag: res.headers.get("etag") ?? "", entries: [...prev.entries, ...entries.filter((e) => !known.has(e.id))] };
+  cache.set(a.key, next);
+  return next.entries;
 }
 
 const norm = (s: string) => s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
@@ -117,11 +121,11 @@ export function mergeEntries(mom: Mom, entries: AttendanceEntry[]) {
 }
 
 /** Pulls the latest sign-ins into the note's MoM. Returns how many rows were added or completed. */
-export async function syncAttendance(noteId: string) {
+export async function syncAttendance(noteId: string, force = false) {
   const note = await getNote(noteId);
   const a = note?.mom?.attendance;
   if (!a) return 0;
-  const entries = await fetchAttendance(a);
+  const entries = await fetchAttendance(a, force);
   if (!entries.length) return 0;
   const probe = structuredClone(note.mom ?? emptyMom());
   if (!mergeEntries(probe, entries)) return 0;
