@@ -83,6 +83,16 @@ export interface MomAttendee {
   empNo: string;
   title: string;
   signature?: Signature;
+  /** Id of the online attendance entry this row came from. */
+  source?: string;
+}
+
+export interface MomAttendance {
+  /** Public id printed in the QR code. */
+  id: string;
+  /** Organizer secret that reads the submissions; stays on this device. */
+  key: string;
+  createdAt: number;
 }
 
 export interface MomItem {
@@ -106,6 +116,11 @@ export interface Mom {
   preparedBy: { name: string; position: string; signature?: Signature };
   /** Slides shown as evidence; undefined means pick automatically. */
   evidenceSlideIds?: string[];
+  /** Attendees must sign on the attendance form; undefined means yes. */
+  needSignature?: boolean;
+  attendance?: MomAttendance;
+  /** Online sign-ins the user removed from the roster, so syncing does not bring them back. */
+  dismissedEntries?: string[];
 }
 
 export interface Slide {

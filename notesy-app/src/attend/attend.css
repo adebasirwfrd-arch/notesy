@@ -1,0 +1,75 @@
+body.att-body { background: #0f172a; color: #0f172a; font-family: Inter, "Segoe UI", system-ui, -apple-system, sans-serif; }
+body.att-body #root { height: auto; min-height: 100%; }
+
+.att-page {
+  max-width: 480px; margin: 0 auto; min-height: 100vh;
+  padding: max(28px, env(safe-area-inset-top)) 14px max(24px, env(safe-area-inset-bottom));
+  display: flex; flex-direction: column; align-items: stretch; gap: 18px;
+}
+.att-center { flex: 1; display: flex; align-items: center; justify-content: center; color: #94a3b8; }
+
+.att-badge {
+  align-self: center; padding: 8px 18px; border-radius: 999px;
+  background: rgba(225, 29, 46, 0.14); border: 1px solid rgba(225, 29, 46, 0.35);
+  color: #e11d2e; font-size: 12px; font-weight: 800; letter-spacing: 0.12em;
+}
+.att-title {
+  margin: 0; color: #fff; text-align: center; text-transform: uppercase;
+  font-size: clamp(22px, 6.6vw, 30px); line-height: 1.18; font-weight: 900; letter-spacing: -0.01em;
+  overflow-wrap: anywhere;
+}
+
+.att-card { background: #f4f4f5; border-radius: 24px; padding: 18px; }
+.att-info { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 12px; padding: 18px 20px; }
+.att-info span {
+  display: flex; align-items: flex-start; gap: 8px; color: #94a3b8;
+  font-size: 13.5px; font-weight: 800; text-transform: uppercase; line-height: 1.3; overflow-wrap: anywhere;
+}
+.att-info span.wide { grid-column: 1 / -1; }
+.att-info svg { color: #e11d2e; flex: none; margin-top: -1px; }
+
+.att-form { display: flex; flex-direction: column; gap: 20px; padding: 26px 22px 24px; border-radius: 28px; }
+.att-field { display: flex; flex-direction: column; gap: 8px; }
+.att-label { font-size: 12px; font-weight: 800; color: #94a3b8; letter-spacing: 0.02em; }
+.att-input {
+  display: flex; align-items: center; gap: 12px; padding: 0 16px; height: 52px;
+  background: #f8f8f9; border: 1.5px solid transparent; border-radius: 14px; color: #94a3b8;
+  transition: border-color 0.15s, background 0.15s;
+}
+.att-input:focus-within { border-color: rgba(225, 29, 46, 0.45); background: #fff; color: #e11d2e; }
+.att-input svg { flex: none; }
+.att-input input {
+  border: 0; background: transparent; padding: 0; height: 100%; font-size: 16px; color: #0f172a; box-shadow: none !important;
+}
+.att-input input::placeholder { color: #9ca3af; }
+
+.att-sign {
+  min-height: 120px; border-radius: 14px; background: #fff; border: 1.5px dashed #cbd5e1; color: #64748b;
+  display: flex; align-items: center; justify-content: center; padding: 10px; font-size: 14.5px; font-weight: 600;
+}
+.att-sign span { display: inline-flex; align-items: center; gap: 8px; text-align: left; }
+.att-sign.has { border-style: solid; border-color: #e2e8f0; }
+.att-sign img { max-width: 100%; max-height: 110px; }
+
+.att-submit {
+  margin-top: 6px; height: 60px; border-radius: 16px; background: #e30613; color: #fff;
+  font-size: 17px; font-weight: 900; letter-spacing: 0.04em;
+  box-shadow: 0 12px 28px -10px rgba(227, 6, 19, 0.7);
+  display: flex; align-items: center; justify-content: center;
+}
+.att-submit:active:not(:disabled) { transform: translateY(1px); }
+.att-error { margin: -6px 0 0; color: #dc2626; font-size: 14px; font-weight: 600; }
+.att-link { color: #e11d2e; font-weight: 700; font-size: 14.5px; text-decoration: underline; text-underline-offset: 3px; align-self: center; }
+.att-link.small { font-size: 13px; align-self: flex-start; color: #64748b; }
+
+.att-message { display: flex; flex-direction: column; align-items: center; gap: 8px; text-align: center; padding: 28px 22px; border-radius: 28px; }
+.att-message b { font-size: 19px; font-weight: 900; }
+.att-message p { margin: 0 0 6px; color: #475569; font-size: 15px; line-height: 1.45; }
+.att-ok { color: #16a34a; }
+.att-bad { color: #e11d2e; }
+.att-foot { margin-top: auto; text-align: center; color: #475569; font-size: 12px; }
+
+/* The signature modal is the app's own; on the dark page it only needs to fill a phone screen nicely. */
+.att-body .modal-scrim { padding: 10px; align-items: flex-end; }
+.att-body .sign-modal { border-radius: 20px; }
+@media (min-width: 560px) { .att-body .modal-scrim { align-items: center; } }

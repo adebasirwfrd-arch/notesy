@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, FileDown, FileText, Loader2, Plus, Sparkles, Trash2, Upload } from "lucide-react";
+import { Check, FileDown, FileText, Loader2, Plus, QrCode, RefreshCw, Sparkles, Trash2, Upload, X } from "lucide-react";
+import { createPortal } from "react-dom";
 import type { Mom, Note, Slide } from "../../lib/types";
 import { getNote, updateNote } from "../../lib/db";
 import { EVIDENCE_SLOTS, emptyMom, evidenceName, evidenceSlides, meetingDate, meetingTime, momTemplateName, onMomTemplateChange, setMomTemplate, summaryMarkdown } from "../../lib/mom";
@@ -10,6 +11,8 @@ import { useBlobUrl } from "../../lib/hooks";
 import { toast, toastError } from "../../lib/toast";
 import { formatClock, uid } from "../../lib/util";
 import { AttendeesTable, MeetingInfoFields, PreparedByFields } from "../mom/MomFields";
+import { AttendanceQr } from "../mom/AttendanceQr";
+import { attendanceInfo, attendanceOpen, newAttendance, publishAttendance, syncAttendance } from "../../lib/attendance";
 
 const STATUSES = ["Open", "In Progress", "Closed", "Info"];
 
@@ -68,7 +71,8 @@ export function MomTab({ note, slides }: { note: Note; slides: Slide[] }) {
   const draftRef = useRef(draft);
   const dirty = useRef(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [busy, setBusy] = useState<"docx" | "pdf" | "ai" | null>(null);
+  const [busy, setBusy] = useState<"docx" | "pdf" | "ai" | "sync" | null>(null);
+  const [showQr, setShowQr] = useState(false);
 
   useEffect(() => {
     if (dirty.current) return;
@@ -128,6 +132,42 @@ export function MomTab({ note, slides }: { note: Note; slides: Slide[] }) {
       setBusy(null);
     }
   };
+
+  const info = attendanceInfo(draft, note.titleIsAuto ? "" : note.title, note);
+  const infoKey = JSON.stringify(info);
+  const published = useRef(infoKey);
+  const attendance = draft.attendance;
+  useEffect(() => {
+    if (!attendance || !attendanceOpen(attendance) || published.current === infoKey) return;
+    const t = setTimeout(() => {
+      published.current = infoKey;
+      publishAttendance(attendance, info).catch(() => (published.current = ""));
+    }, 1500);
+    return () => clearTimeout(t);
+  }, [attendance?.key, infoKey]);
+
+  const openQr = async () => {
+    if (!attendance || !attendanceOpen(attendance)) {
+      const next = await newAttendance();
+      patch((m) => void (m.attendance = next));
+    }
+    published.current = infoKey;
+    setShowQr(true);
+  };
+
+  const refreshAttendance = async () => {
+    setBusy("sync");
+    try {
+      await write();
+      const n = await syncAttendance(note.id);
+      toast(n ? `${n} peserta dari QR ditambahkan.` : "Belum ada peserta baru dari QR.", n ? "success" : "info");
+    } catch (e) {
+      toastError(e);
+    } finally {
+      setBusy(null);
+    }
+  };
+  const fromQr = draft.attendees.filter((a) => a.source).length;
 
   const evidence = evidenceSlides(draft, slides);
   const chosen = new Set(evidence.map((s) => s.id));
@@ -211,8 +251,27 @@ export function MomTab({ note, slides }: { note: Note; slides: Slide[] }) {
       </section>
 
       <section className="mom-section">
-        <h3>Daftar hadir & tanda tangan</h3>
-        <AttendeesTable mom={draft} patch={patch} withSignature />
+        <div className="mom-section-head">
+          <h3>Daftar hadir & tanda tangan</h3>
+          <div className="row">
+            {attendance && (
+              <button className="btn btn-small btn-ghost" disabled={!!busy} onClick={refreshAttendance}>
+                {busy === "sync" ? <Loader2 size={14} className="spin" /> : <RefreshCw size={14} />} Muat absensi
+              </button>
+            )}
+            <button className="btn btn-small" onClick={openQr}>
+              <QrCode size={14} /> QR absensi
+            </button>
+          </div>
+        </div>
+        <label className="toggle mom-sign-toggle">
+          <input type="checkbox" checked={draft.needSignature !== false} onChange={(e) => patch((m) => void (m.needSignature = e.target.checked))} />
+          <span>
+            <b>Peserta wajib tanda tangan</b>
+            <small>{attendance ? `Form absensi QR ${draft.needSignature !== false ? "meminta" : "tidak meminta"} tanda tangan.` : "Berlaku untuk form absensi QR."}{fromQr ? ` ${fromQr} peserta mengisi lewat QR.` : ""}</small>
+          </span>
+        </label>
+        <AttendeesTable mom={draft} patch={patch} withSignature={draft.needSignature !== false} />
       </section>
 
       <section className="mom-section">
@@ -254,6 +313,28 @@ export function MomTab({ note, slides }: { note: Note; slides: Slide[] }) {
           <p className="muted small-note">Belum ada tangkapan layar. Kotak “PICTURE HERE” dibiarkan kosong seperti template.</p>
         )}
       </section>
+
+      {showQr &&
+        draft.attendance &&
+        createPortal(
+          <div className="modal-scrim" onMouseDown={(e) => e.target === e.currentTarget && setShowQr(false)}>
+            <div className="modal mom-start" role="dialog" aria-label="QR absensi">
+              <header className="modal-head">
+                <div>
+                  <b>QR absensi</b>
+                  <small>Peserta scan dengan kamera HP lalu mengisi daftar hadir.</small>
+                </div>
+                <button className="icon-btn" onClick={() => setShowQr(false)} aria-label="Tutup">
+                  <X size={18} />
+                </button>
+              </header>
+              <div className="modal-body">
+                <AttendanceQr attendance={draft.attendance} info={info} />
+              </div>
+            </div>
+          </div>,
+          document.body,
+        )}
 
       <section className="mom-section">
         <h3>Ringkasan</h3>

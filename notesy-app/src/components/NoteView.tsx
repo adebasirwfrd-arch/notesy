@@ -14,6 +14,7 @@ import { TranscriptTab } from "./tabs/TranscriptTab";
 import { SlidesTab } from "./tabs/SlidesTab";
 import { MomTab } from "./tabs/MomTab";
 import { downloadMom } from "../lib/mom/export";
+import { attendanceOpen, watchAttendance } from "../lib/attendance";
 import { AskBar } from "./AskBar";
 import type { Note } from "../lib/types";
 
@@ -68,6 +69,13 @@ export function NoteView({ noteId, onNavigate, onToggleSidebar }: Props) {
   const titleRef = useRef<HTMLInputElement>(null);
 
   const activeTab: Tab = tab ?? (isLive ? "memo" : note?.summaries.length ? "summary" : note?.transcript.length ? "transcript" : "memo");
+
+  const attendance = note?.mom?.attendance;
+  const watching = attendance && attendanceOpen(attendance) ? attendance.key : null;
+  useEffect(() => {
+    if (!watching) return;
+    return watchAttendance(noteId, (n) => toast(`${n} peserta mengisi absensi lewat QR.`, "success"));
+  }, [noteId, watching]);
 
   useEffect(() => {
     if (!menu) return;

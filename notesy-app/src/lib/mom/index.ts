@@ -79,6 +79,7 @@ export interface LastForm {
   facilitator: string;
   attendees: MomAttendee[];
   preparedBy: { name: string; position: string };
+  needSignature?: boolean;
 }
 
 export const getLastForm = () => kvGet<LastForm>(LAST_FORM_KEY);
@@ -89,6 +90,7 @@ export function saveLastForm(mom: Mom) {
     facilitator: mom.facilitator,
     attendees: mom.attendees.map(({ signature: _s, ...a }) => a),
     preparedBy: { name: mom.preparedBy.name, position: mom.preparedBy.position },
+    needSignature: mom.needSignature !== false,
   } satisfies LastForm);
 }
 

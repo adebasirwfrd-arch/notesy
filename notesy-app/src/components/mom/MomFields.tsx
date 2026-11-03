@@ -118,7 +118,17 @@ export function AttendeesTable({ mom, patch, withSignature }: { mom: Mom; patch:
               <SignatureCell sig={a.signature} name={a.name} onChange={(s) => set(a.id, (x) => void (x.signature = s))} />
             </div>
           )}
-          <button className="icon-btn" onClick={() => patch((m) => void (m.attendees = m.attendees.filter((x) => x.id !== a.id)))} aria-label="Hapus peserta" title="Hapus peserta">
+          <button
+            className="icon-btn"
+            onClick={() =>
+              patch((m) => {
+                m.attendees = m.attendees.filter((x) => x.id !== a.id);
+                if (a.source) m.dismissedEntries = [...(m.dismissedEntries ?? []), a.source];
+              })
+            }
+            aria-label="Hapus peserta"
+            title="Hapus peserta"
+          >
             <Trash2 size={15} />
           </button>
         </div>

@@ -1,8 +1,11 @@
 import { useEffect, useState } from "react";
-import { History, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, History, X } from "lucide-react";
 import type { Mom } from "../../lib/types";
 import { emptyMom, getLastForm, newAttendee } from "../../lib/mom";
+import { attendanceInfo, attendanceOpen, newAttendance } from "../../lib/attendance";
+import { toastError } from "../../lib/toast";
 import { AttendeesTable, MeetingInfoFields, PreparedByFields } from "./MomFields";
+import { AttendanceQr } from "./AttendanceQr";
 
 interface Props {
   initial?: Mom;
@@ -17,12 +20,13 @@ export function MomStartDialog({ initial, title: initialTitle, onStart, onSkip, 
   const [mom, setMom] = useState<Mom>(() => structuredClone(initial ?? emptyMom()));
   const [title, setTitle] = useState(initialTitle);
   const [hasLast, setHasLast] = useState(false);
+  const [step, setStep] = useState<"form" | "qr">("form");
 
   useEffect(() => {
     void getLastForm().then((last) => {
       if (!last) return;
       setHasLast(true);
-      if (!initial) setMom((m) => ({ ...m, preparedBy: { ...m.preparedBy, ...last.preparedBy } }));
+      if (!initial) setMom((m) => ({ ...m, needSignature: last.needSignature ?? m.needSignature, preparedBy: { ...m.preparedBy, ...last.preparedBy } }));
     });
   }, [initial]);
 
@@ -51,6 +55,56 @@ export function MomStartDialog({ initial, title: initialTitle, onStart, onSkip, 
     }));
   };
 
+  const cleaned = () => ({ ...mom, attendees: mom.attendees.filter((a) => a.name.trim()) });
+
+  const next = async () => {
+    try {
+      if (!mom.attendance || !attendanceOpen(mom.attendance)) {
+        const attendance = await newAttendance();
+        setMom((m) => ({ ...m, attendance }));
+      }
+      setStep("qr");
+    } catch (e) {
+      toastError(e);
+    }
+  };
+
+  if (step === "qr" && mom.attendance)
+    return (
+      <div className="modal-scrim" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+        <form
+          className="modal mom-start"
+          role="dialog"
+          aria-label="QR absensi"
+          onSubmit={(e) => {
+            e.preventDefault();
+            onStart(cleaned(), title.trim());
+          }}
+        >
+          <header className="modal-head">
+            <div>
+              <b>QR absensi</b>
+              <small>Tampilkan atau bagikan QR ini. Peserta scan dengan kamera HP lalu mengisi daftar hadir.</small>
+            </div>
+            <button type="button" className="icon-btn" onClick={onClose} aria-label="Tutup">
+              <X size={18} />
+            </button>
+          </header>
+          <div className="modal-body">
+            <AttendanceQr attendance={mom.attendance} info={attendanceInfo(mom, title)} />
+          </div>
+          <footer className="modal-foot">
+            <button type="button" className="btn btn-ghost" onClick={() => setStep("form")}>
+              <ArrowLeft size={15} /> Kembali
+            </button>
+            <button type="submit" className="btn btn-record" autoFocus>
+              <span className="rec-dot" /> Mulai rekam
+            </button>
+          </footer>
+        </form>
+      </div>
+    );
+
   return (
     <div className="modal-scrim" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <form
@@ -59,7 +113,7 @@ export function MomStartDialog({ initial, title: initialTitle, onStart, onSkip, 
         aria-label="Informasi rapat"
         onSubmit={(e) => {
           e.preventDefault();
-          onStart({ ...mom, attendees: mom.attendees.filter((a) => a.name.trim()) }, title.trim());
+          void next();
         }}
       >
         <header className="modal-head">
@@ -86,16 +140,23 @@ export function MomStartDialog({ initial, title: initialTitle, onStart, onSkip, 
             )}
           </div>
           <AttendeesTable mom={mom} patch={patch} />
+          <label className="toggle mom-sign-toggle">
+            <input type="checkbox" checked={mom.needSignature !== false} onChange={(e) => patch((m) => void (m.needSignature = e.target.checked))} />
+            <span>
+              <b>Peserta wajib tanda tangan</b>
+              <small>Form absensi lewat QR akan menampilkan kolom tanda tangan (tulis manual atau unggah gambar). Bila tidak dicentang, peserta cukup mengisi data diri.</small>
+            </span>
+          </label>
           <h4>Disusun oleh</h4>
           <PreparedByFields mom={mom} patch={patch} />
-          <p className="muted small-note">Tanda tangan peserta dan penyusun bisa diisi di tab MoM setelah rapat (tulis manual atau unggah gambar).</p>
+          <p className="muted small-note">Setelah klik Lanjut, Notesy membuat QR absensi untuk peserta. Tanda tangan penyusun bisa diisi di tab MoM.</p>
         </div>
         <footer className="modal-foot">
           <button type="button" className="btn btn-ghost" onClick={onSkip}>
             Lewati
           </button>
-          <button type="submit" className="btn btn-record">
-            <span className="rec-dot" /> Mulai rekam
+          <button type="submit" className="btn btn-primary">
+            Lanjut <ArrowRight size={15} />
           </button>
         </footer>
       </form>

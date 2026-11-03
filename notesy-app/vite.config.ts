@@ -36,6 +36,7 @@ export default defineConfig(({ mode }) => ({
     target: "es2022",
     chunkSizeWarningLimit: 4000,
     modulePreload: { polyfill: false },
+    rollupOptions: mode === "extension" || mode === "android" ? undefined : { input: { main: "index.html", attend: "attend.html" } },
   },
   worker: { format: "es" },
   optimizeDeps: { exclude: ["@huggingface/transformers"] },

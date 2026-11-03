@@ -5,6 +5,7 @@
   "buildCommand": "pnpm build",
   "outputDirectory": "dist",
   "rewrites": [
+    { "source": "/absen", "destination": "/attend.html" },
     {
       "source": "/cursor-api/:path*",
       "has": [{ "type": "header", "key": "x-notesy-pass" }],

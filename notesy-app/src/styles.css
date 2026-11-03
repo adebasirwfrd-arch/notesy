@@ -424,3 +424,28 @@ a { color: inherit; }
   .mom-item > input { grid-column: 2 / 3; }
   .mom-item > .icon-btn { grid-column: 3; grid-row: 1; }
 }
+
+/* attendance QR */
+.mom-sign-toggle { align-items: flex-start; gap: 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); cursor: pointer; }
+.mom-sign-toggle input { margin-top: 3px; accent-color: var(--accent); width: 16px; height: 16px; flex: none; }
+.mom-sign-toggle span { display: flex; flex-direction: column; gap: 2px; font-size: 13.5px; }
+.mom-sign-toggle small { color: var(--muted); font-size: 12.5px; line-height: 1.4; }
+.mom-section .mom-sign-toggle { margin-bottom: 10px; }
+.att-qr { display: grid; grid-template-columns: 240px 1fr; gap: 18px; align-items: start; }
+.att-qr-code { width: 240px; height: 240px; border-radius: 14px; border: 1px solid var(--border); background: #fff; display: flex; align-items: center; justify-content: center; overflow: hidden; transition: opacity 0.2s; }
+.att-qr-code.pending { opacity: 0.45; }
+.att-qr-code img { width: 100%; height: 100%; image-rendering: pixelated; }
+.att-qr-side { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.att-qr-title { font-size: 16px; }
+.att-qr-side small { line-height: 1.5; }
+.att-qr-status { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0; font-size: 13px; color: var(--muted); }
+.att-qr-status.ok { color: var(--green, #15803d); }
+.att-qr-status.err { color: var(--red); }
+.att-qr-link { font-size: 12px; padding: 6px 8px; border-radius: 6px; background: var(--panel); overflow-wrap: anywhere; user-select: all; }
+.att-qr-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+@media (max-width: 640px) {
+  .att-qr { grid-template-columns: 1fr; justify-items: center; text-align: center; }
+  .att-qr-code { width: min(280px, 78vw); height: min(280px, 78vw); }
+  .att-qr-side { align-items: center; }
+  .att-qr-actions { justify-content: center; }
+}
