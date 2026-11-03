@@ -2,6 +2,7 @@ import { TARGET, apiUrl } from "../platform";
 import { sleep } from "../util";
 
 const BASE = "https://api.cursor.com";
+export const NOTESY_SERVER = (import.meta.env.VITE_NOTESY_SERVER as string | undefined) ?? "https://notesy-three.vercel.app";
 
 export interface PromptImage {
   data: string;
@@ -41,6 +42,12 @@ export class CursorClient {
     return { ...auth, ...extra };
   }
 
+  /** Passcode callers outside the hosted web app reach the server-held key through the Notesy server. */
+  private url(path: string) {
+    if (TARGET !== "web" && !isCursorKey(this.apiKey)) return `${NOTESY_SERVER}/cursor-api${path}`;
+    return apiUrl(BASE + path);
+  }
+
   /** The Android WebView origin is rejected by Cursor's CORS policy, so requests go through the native HTTP stack there. */
   private async send(method: string, url: string, headers: Record<string, string>, body?: string, signal?: AbortSignal) {
     if (TARGET === "android") {
@@ -50,14 +57,14 @@ export class CursorClient {
       const text = typeof r.data === "string" ? r.data : JSON.stringify(r.data ?? "");
       return { ok: r.status >= 200 && r.status < 300, status: r.status, statusText: "", text };
     }
-    const res = await fetch(apiUrl(url), { method, headers, body, signal });
+    const res = await fetch(url, { method, headers, body, signal });
     return { ok: res.ok, status: res.status, statusText: res.statusText, text: await res.text() };
   }
 
   private async req<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
     const res = await this.send(
       method,
-      BASE + path,
+      this.url(path),
       this.headers(body ? { "Content-Type": "application/json" } : {}),
       body ? JSON.stringify(body) : undefined,
       signal,
@@ -137,7 +144,7 @@ export class CursorClient {
     let streamed = "";
     try {
       if (TARGET === "android") throw new Error("no browser stream on android");
-      const res = await fetch(apiUrl(`${BASE}/v1/agents/${agentId}/runs/${runId}/stream`), {
+      const res = await fetch(this.url(`/v1/agents/${agentId}/runs/${runId}/stream`), {
         headers: this.headers({ Accept: "text/event-stream" }),
         signal,
       });

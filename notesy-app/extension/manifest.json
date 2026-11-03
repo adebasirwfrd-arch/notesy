@@ -14,6 +14,7 @@
   "permissions": ["storage", "unlimitedStorage"],
   "host_permissions": [
     "https://api.cursor.com/*",
+    "https://notesy-three.vercel.app/*",
     "https://huggingface.co/*",
     "https://*.huggingface.co/*",
     "https://*.hf.co/*"
