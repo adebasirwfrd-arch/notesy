@@ -276,12 +276,18 @@ export async function stopRecording() {
     n.durationMs = durationMs;
     n.status = { kind: "idle" };
   });
-  set(null);
   void processNote(noteId);
+  set(null);
 }
 
 const jobs = new Map<string, AbortController>();
 export const isProcessing = (noteId: string) => jobs.has(noteId);
+const jobDone = new Set<() => void>();
+export const hasActiveWork = () => !!live || jobs.size > 0;
+export function onActiveWorkChange(f: () => void) {
+  subs.add(f);
+  jobDone.add(f);
+}
 
 export function cancelProcessing(noteId: string) {
   jobs.get(noteId)?.abort();
@@ -350,6 +356,7 @@ export async function processNote(noteId: string, opts: ProcessOptions = {}) {
     await setStatus(noteId, aborted ? { kind: "idle" } : { kind: "error", message: errorMessage(e) });
   } finally {
     jobs.delete(noteId);
+    jobDone.forEach((f) => f());
   }
 }
 

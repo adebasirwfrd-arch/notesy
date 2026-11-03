@@ -12,11 +12,23 @@ const dropBundledOrtWasm = (): Plugin => ({
   },
 });
 
+const BUILD_ID = process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 12) || String(Date.now());
+
+/** Open web tabs poll this file to notice a newer deploy. */
+const emitVersion = (): Plugin => ({
+  name: "emit-version",
+  apply: "build",
+  generateBundle() {
+    this.emitFile({ type: "asset", fileName: "version.json", source: JSON.stringify({ build: BUILD_ID }) });
+  },
+});
+
 export default defineConfig(({ mode }) => ({
   base: "./",
-  plugins: [react(), dropBundledOrtWasm()],
+  plugins: [react(), dropBundledOrtWasm(), emitVersion()],
   define: {
     __TARGET__: JSON.stringify(mode === "extension" ? "extension" : mode === "android" ? "android" : "web"),
+    __BUILD__: JSON.stringify(BUILD_ID),
   },
   build: {
     outDir: mode === "extension" ? "dist-ext" : mode === "android" ? "dist-android" : "dist",
