@@ -3,6 +3,7 @@ import { ensureHostPermission, assetUrl, hasWebGPU } from "../platform";
 import type { AudioTrack, Channel, DictionaryEntry, Segment, Settings } from "../types";
 import { uid } from "../util";
 import { decodeToMono16k, SAMPLE_RATE, speechWindows } from "./audio";
+import { repairHeaderlessWebm } from "./webm";
 
 export const WHISPER_MODELS = [
   { id: "onnx-community/whisper-base", name: "Whisper Base", size: "~80 MB", note: "Cepat, akurasi cukup" },
@@ -257,6 +258,7 @@ export async function transcribeTracks({ audio, settings, dictionary, speakerFor
 
   const language = settings.sttLanguage;
   const segments: Segment[] = [];
+  const failures: string[] = [];
   for (let i = 0; i < sources.length; i++) {
     const track = sources[i];
     const channel: Channel = track.channel === "system" ? "system" : "mic";
@@ -268,26 +270,38 @@ export async function transcribeTracks({ audio, settings, dictionary, speakerFor
     const name = channel === "system" ? "audio peserta" : "mikrofon";
     onProgress(base, `Menyiapkan ${name}…`);
     let chunks: Chunk[];
-    if (settings.sttEngine === "api") {
-      onProgress(base, `Mengirim ${name} ke layanan transkripsi…`);
-      chunks = await transcribeApi(blob, settings, dictionary);
-    } else {
-      const pcm = await decodeToMono16k(blob);
-      if (language === "auto") onProgress(base, "Mendeteksi bahasa…");
-      chunks = await transcribeBrowser(
-        pcm,
-        { ...settings, sttLanguage: language },
-        (f) => onProgress(base + span * f, `Mentranskrip ${name} ${Math.round(f * 100)}%`),
-        (l) => onLanguage?.(l),
-      );
+    let startSec = 0;
+    try {
+      if (settings.sttEngine === "api") {
+        onProgress(base, `Mengirim ${name} ke layanan transkripsi…`);
+        const bytes = new Uint8Array(await blob.arrayBuffer());
+        const repaired = repairHeaderlessWebm(bytes);
+        startSec = repaired?.startSec ?? 0;
+        chunks = await transcribeApi(repaired ? new Blob([repaired.bytes as BlobPart], { type: "audio/webm" }) : blob, settings, dictionary);
+      } else {
+        const decoded = await decodeToMono16k(blob);
+        startSec = decoded.startSec;
+        if (language === "auto") onProgress(base, "Mendeteksi bahasa…");
+        chunks = await transcribeBrowser(
+          decoded.pcm,
+          { ...settings, sttLanguage: language },
+          (f) => onProgress(base + span * f, `Mentranskrip ${name} ${Math.round(f * 100)}%`),
+          (l) => onLanguage?.(l),
+        );
+      }
+    } catch (e) {
+      console.warn("transcribe track failed", track.blobKey, e);
+      failures.push(`${name}: ${e instanceof Error ? e.message : String(e)}`);
+      continue;
     }
-    const offset = (track.offsetMs ?? 0) / 1000;
+    const offset = (track.offsetMs ?? 0) / 1000 + startSec;
     for (const c of chunks) {
       const text = applyDictionary(cleanText(c.text), dictionary);
       if (!text) continue;
       segments.push({ id: uid("g_"), channel, speaker: label, start: c.start + offset, end: Math.max(c.end, c.start) + offset, text });
     }
   }
+  if (failures.length === sources.length) throw new Error(`Audio tidak dapat dibaca (${failures.join("; ")}).`);
   segments.sort((a, b) => a.start - b.start);
   return dropEcho(segments);
 }

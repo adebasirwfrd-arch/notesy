@@ -32,6 +32,29 @@ const set = (next: LiveSession | null) => {
 };
 const patch = (p: Partial<LiveSession>) => live && set({ ...live, ...p });
 
+/**
+ * Held by the tab that is recording, for as long as it records. Other Notesy tabs (a second window, or an idle tab
+ * that reloaded for an update) see it and leave the live chunk journal alone instead of "recovering" it.
+ */
+const LOCK_PREFIX = "notesy-recording:";
+let releaseRecordingLock: (() => void) | null = null;
+
+function holdRecordingLock(noteId: string) {
+  if (!navigator.locks) return;
+  void navigator.locks.request(LOCK_PREFIX + noteId, () => new Promise<void>((resolve) => (releaseRecordingLock = resolve)));
+}
+
+function dropRecordingLock() {
+  releaseRecordingLock?.();
+  releaseRecordingLock = null;
+}
+
+async function notesRecordingElsewhere() {
+  if (!navigator.locks) return new Set<string>();
+  const { held = [] } = await navigator.locks.query();
+  return new Set(held.map((l) => l.name ?? "").filter((n) => n.startsWith(LOCK_PREFIX)).map((n) => n.slice(LOCK_PREFIX.length)));
+}
+
 export const useLiveSession = () =>
   useSyncExternalStore(
     (f) => (subs.add(f), () => subs.delete(f)),
@@ -78,6 +101,7 @@ export async function startRecording(mode: CaptureMode, existingNoteId?: string)
     await putNote(note);
   }
   const noteId = note.id;
+  holdRecordingLock(noteId);
   set({
     noteId,
     mode,
@@ -95,6 +119,7 @@ export async function startRecording(mode: CaptureMode, existingNoteId?: string)
     await rec.start();
   } catch (e) {
     set(null);
+    dropRecordingLock();
     if (!existingNoteId) {
       const n = await getNote(noteId);
       if (n && !n.memo && !n.audio.length) await deleteNote(noteId);
@@ -272,10 +297,11 @@ export async function stopRecording() {
   void wakeLock?.release().catch(() => {});
   wakeLock = null;
   await updateNote(noteId, (n) => {
-    n.audio = tracks;
+    n.audio = [...n.audio.filter((a) => !tracks.some((t) => t.blobKey === a.blobKey)), ...tracks];
     n.durationMs = durationMs;
     n.status = { kind: "idle" };
   });
+  dropRecordingLock();
   void processNote(noteId);
   set(null);
 }
@@ -413,9 +439,10 @@ export async function recoverInterrupted() {
   const sessions = await orphanChunkSessions();
   const notes = await listNotes();
   const mime = pickMime() || "audio/webm";
+  const elsewhere = await notesRecordingElsewhere();
   for (const n of notes) {
     if (n.status.kind === "recording" || sessions.some((k) => k.startsWith(`${n.id}:`))) {
-      if (live?.noteId === n.id) continue;
+      if (live?.noteId === n.id || elsewhere.has(n.id)) continue;
       const parts = sessions.filter((k) => parseSessionKey(k)?.noteId === n.id).map((session) => ({ session, mime }));
       const tracks = await finalizeTracks(parts);
       await updateNote(n.id, (x) => {

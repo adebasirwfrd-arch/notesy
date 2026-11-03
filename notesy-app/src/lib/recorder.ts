@@ -356,7 +356,8 @@ export async function finalizeTracks(parts: { session: string; mime: string }[])
     if (!parsed) continue;
     const blob = await takeChunks(session, mime);
     if (!blob || !blob.size) continue;
-    const blobKey = `audio:${session}`;
+    // Unique per finalize: a second finalize of the same session must never overwrite audio saved by the first.
+    const blobKey = `audio:${session}@${Date.now().toString(36)}`;
     await putBlob(blobKey, blob);
     tracks.push({ channel: parsed.channel, blobKey, mime: blob.type || mime, bytes: blob.size, ...(parsed.offsetMs ? { offsetMs: parsed.offsetMs } : {}) });
   }

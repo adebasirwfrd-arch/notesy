@@ -1,7 +1,8 @@
+import { hasWebmHeader, repairHeaderlessWebm } from "./webm";
+
 export const SAMPLE_RATE = 16000;
 
-export async function decodeToMono16k(blob: Blob): Promise<Float32Array> {
-  const buf = await blob.arrayBuffer();
+async function decode(buf: ArrayBuffer): Promise<Float32Array> {
   const ctx = new AudioContext({ sampleRate: SAMPLE_RATE });
   try {
     const audio = await ctx.decodeAudioData(buf);
@@ -15,6 +16,20 @@ export async function decodeToMono16k(blob: Blob): Promise<Float32Array> {
   } finally {
     ctx.close().catch(() => {});
   }
+}
+
+/**
+ * Decodes to 16 kHz mono. `startSec` is non-zero when the recording lost its first chunk and was rebuilt from a later
+ * cluster: the audio then begins that far into the track.
+ */
+export async function decodeToMono16k(blob: Blob): Promise<{ pcm: Float32Array; startSec: number }> {
+  const buf = await blob.arrayBuffer();
+  const bytes = new Uint8Array(buf);
+  if (!hasWebmHeader(bytes)) {
+    const repaired = repairHeaderlessWebm(bytes);
+    if (repaired) return { pcm: await decode(repaired.bytes.buffer as ArrayBuffer), startSec: repaired.startSec };
+  }
+  return { pcm: await decode(buf), startSec: 0 };
 }
 
 export interface Window {
