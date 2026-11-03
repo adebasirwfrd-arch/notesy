@@ -1,6 +1,10 @@
 import { emit, getBlob, kvGet, kvSet, listSlides, subscribe, updateNote } from "../db";
 import type { Mom, MomAttendee, Note, Slide } from "../types";
 import { formatClock, uid } from "../util";
+import { getSettings } from "../settings";
+import { TARGET } from "../platform";
+import { NOTESY_SERVER } from "../ai/cursor";
+import { cloudPass } from "../stt/cloud";
 
 const TEMPLATE_KEY = "mom-template";
 const LAST_FORM_KEY = "mom-last-form";
@@ -57,18 +61,45 @@ export async function loadEvidence(mom: Mom, noteId: string) {
   return out;
 }
 
-/** The company template stays on this device: it is confidential and must not ship in the public repo. */
+/** The company template is confidential and must not ship in the public repo: it is cached on the device and
+ * shared between devices through the passcode-protected Notesy server. */
 export async function getMomTemplate(): Promise<Blob | undefined> {
-  return kvGet<Blob>(TEMPLATE_KEY);
+  return (await kvGet<Blob>(TEMPLATE_KEY)) ?? (await pullMomTemplate().catch(() => undefined));
 }
 
-export async function setMomTemplate(file: File) {
+const templateUrl = () => (TARGET === "web" ? "/api/mom-template" : `${NOTESY_SERVER}/api/mom-template`);
+
+/** Downloads the shared template when this device has none yet; resolves undefined without a passcode or server copy. */
+export async function pullMomTemplate(): Promise<Blob | undefined> {
+  const pass = cloudPass(getSettings());
+  if (!pass) return undefined;
+  const res = await fetch(templateUrl(), { headers: { "x-notesy-pass": pass } });
+  if (res.status === 404) return undefined;
+  if (!res.ok) throw new Error(((await res.json().catch(() => ({}))) as { message?: string }).message ?? `Server Notesy menolak (${res.status}).`);
+  const blob = new Blob([await res.arrayBuffer()], { type: res.headers.get("content-type") ?? "" });
+  await kvSet(TEMPLATE_KEY, blob);
+  await kvSet(`${TEMPLATE_KEY}-name`, decodeURIComponent(res.headers.get("x-file-name") ?? "") || "MoM Roster Meeting.docx");
+  emit("mom-template");
+  return blob;
+}
+
+/** Saves the template on this device and, with a passcode, on the server for the user's other devices. Returns whether it was shared. */
+export async function setMomTemplate(file: File): Promise<boolean> {
   if (!/\.docx$/i.test(file.name)) throw new Error("Template harus file Word .docx.");
   const { readTemplate } = await import("./docx");
   await readTemplate(file);
-  await kvSet(TEMPLATE_KEY, new Blob([await file.arrayBuffer()], { type: file.type }));
+  const data = await file.arrayBuffer();
+  await kvSet(TEMPLATE_KEY, new Blob([data], { type: file.type }));
   await kvSet(`${TEMPLATE_KEY}-name`, file.name);
   emit("mom-template");
+  const pass = cloudPass(getSettings());
+  if (!pass) return false;
+  const res = await fetch(templateUrl(), {
+    method: "PUT",
+    headers: { "x-notesy-pass": pass, "x-file-name": encodeURIComponent(file.name), "content-type": "application/octet-stream" },
+    body: data,
+  }).catch(() => null);
+  return !!res?.ok;
 }
 
 export const momTemplateName = () => kvGet<string>(`${TEMPLATE_KEY}-name`);

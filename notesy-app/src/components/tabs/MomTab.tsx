@@ -3,7 +3,7 @@ import { Check, FileDown, FileText, Loader2, Plus, QrCode, RefreshCw, Sparkles, 
 import { createPortal } from "react-dom";
 import type { Mom, Note, Slide } from "../../lib/types";
 import { getNote, updateNote } from "../../lib/db";
-import { EVIDENCE_SLOTS, emptyMom, evidenceName, evidenceSlides, meetingDate, meetingTime, momTemplateName, onMomTemplateChange, setMomTemplate, summaryMarkdown } from "../../lib/mom";
+import { EVIDENCE_SLOTS, emptyMom, evidenceName, evidenceSlides, meetingDate, meetingTime, momTemplateName, onMomTemplateChange, pullMomTemplate, setMomTemplate, summaryMarkdown } from "../../lib/mom";
 import { downloadMom } from "../../lib/mom/export";
 import { aiConfigured, generateMomItems } from "../../lib/ai";
 import { isProcessing } from "../../lib/session";
@@ -26,7 +26,10 @@ function TemplateCard() {
   const [busy, setBusy] = useState(false);
   useEffect(() => {
     const load = () => void momTemplateName().then((n) => setName(n ?? null));
-    load();
+    void momTemplateName()
+      .then((n) => (n ? undefined : pullMomTemplate()))
+      .catch(() => {})
+      .finally(load);
     const off = onMomTemplateChange(load);
     return () => void off();
   }, []);
@@ -34,8 +37,8 @@ function TemplateCard() {
     if (!file) return;
     setBusy(true);
     try {
-      await setMomTemplate(file);
-      toast("Template MoM tersimpan di perangkat ini.", "success");
+      const shared = await setMomTemplate(file);
+      toast(shared ? "Template MoM tersimpan dan dibagikan ke semua perangkat Anda." : "Template MoM tersimpan di perangkat ini. Isi kode akses Notesy agar perangkat lain ikut mendapatkannya.", "success");
     } catch (e) {
       toastError(e);
     } finally {
@@ -54,7 +57,7 @@ function TemplateCard() {
         ) : (
           <>
             <b>Unggah template MoM sekali di perangkat ini.</b>
-            <small>Pilih file “MoM Roster Meeting.docx”. Template disimpan hanya di perangkat ini, tidak diunggah ke server.</small>
+            <small>Pilih file “MoM Roster Meeting.docx”. Dengan kode akses Notesy, template disimpan privat di server Notesy dan perangkat lain mengunduhnya otomatis.</small>
           </>
         )}
       </div>
