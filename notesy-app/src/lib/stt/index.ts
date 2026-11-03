@@ -281,10 +281,11 @@ export async function transcribeTracks({ audio, settings, dictionary, speakerFor
         (l) => onLanguage?.(l),
       );
     }
+    const offset = (track.offsetMs ?? 0) / 1000;
     for (const c of chunks) {
       const text = applyDictionary(cleanText(c.text), dictionary);
       if (!text) continue;
-      segments.push({ id: uid("g_"), channel, speaker: label, start: c.start, end: Math.max(c.end, c.start), text });
+      segments.push({ id: uid("g_"), channel, speaker: label, start: c.start + offset, end: Math.max(c.end, c.start) + offset, text });
     }
   }
   segments.sort((a, b) => a.start - b.start);

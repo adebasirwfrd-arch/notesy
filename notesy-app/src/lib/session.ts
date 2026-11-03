@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from "react";
 import { deleteNote, getNote, listNotes, orphanChunkSessions, putBlob, putNote, updateNote } from "./db";
-import { MeetingRecorder, finalizeTracks, pickMime, type CaptureMode, type Levels } from "./recorder";
+import { MeetingRecorder, finalizeTracks, parseSessionKey, pickMime, type CaptureMode, type Levels } from "./recorder";
 import { SlideWatcher, encodeFrame, saveSlide } from "./slides";
 import { dictionaryStore, getSettings } from "./settings";
 import { transcribeTracks } from "./stt";
@@ -18,6 +18,8 @@ export interface LiveSession {
   hasMic: boolean;
   micMuted: boolean;
   autoSlides: boolean;
+  /** The browser ended the screen share while audio kept recording. */
+  screenLost: boolean;
 }
 
 let live: LiveSession | null = null;
@@ -86,6 +88,7 @@ export async function startRecording(mode: CaptureMode, existingNoteId?: string)
     hasSystemAudio: false,
     micMuted: false,
     autoSlides: s.captureSlides,
+    screenLost: false,
   });
   const rec = new MeetingRecorder({ noteId, mode, micDeviceId: s.micDeviceId, echoCancellation: s.echoCancellation });
   try {
@@ -100,26 +103,17 @@ export async function startRecording(mode: CaptureMode, existingNoteId?: string)
     throw e;
   }
   recorder = rec;
-  rec.onEnded = () => void stopRecording();
+  rec.onScreenEnded = (surface) => void onScreenEnded(surface);
+  if (mode === "screen" && "Notification" in window && Notification.permission === "default") void Notification.requestPermission().catch(() => {});
   const startedAt = Date.now();
   await updateNote(noteId, (n) => {
     n.status = { kind: "recording" };
     n.startedAt = startedAt;
     n.source = mode;
     n.audio = [];
+    n.events = [];
   });
-  if (rec.videoTrack) {
-    watcher = new SlideWatcher({
-      noteId,
-      track: rec.videoTrack,
-      clock: () => rec.elapsed(),
-      intervalMs: s.slideIntervalMs,
-      sensitivity: s.slideSensitivity,
-      auto: s.captureSlides,
-      onSlide: () => patch({ slideCount: (live?.slideCount ?? 0) + 1 }),
-    });
-    watcher.start();
-  }
+  startWatcher();
   set({
     ...live!,
     state: "recording",
@@ -130,6 +124,78 @@ export async function startRecording(mode: CaptureMode, existingNoteId?: string)
   window.addEventListener("beforeunload", warnUnload);
   if (mode === "mic") wakeLock = await navigator.wakeLock?.request("screen").catch(() => null);
   return noteId;
+}
+
+function startWatcher() {
+  const rec = recorder;
+  if (!rec?.videoTrack || !live) return;
+  const s = getSettings();
+  watcher = new SlideWatcher({
+    noteId: live.noteId,
+    track: rec.videoTrack,
+    clock: () => rec.elapsed(),
+    intervalMs: s.slideIntervalMs,
+    sensitivity: s.slideSensitivity,
+    auto: live.autoSlides,
+    onSlide: () => patch({ slideCount: (live?.slideCount ?? 0) + 1 }),
+  });
+  if (live.state === "paused") watcher.paused = true;
+  watcher.start();
+}
+
+function logEvent(text: string) {
+  if (!live || !recorder) return;
+  const atMs = recorder.elapsed();
+  void updateNote(live.noteId, (n) => {
+    n.events = [...(n.events ?? []), { atMs, text }];
+  });
+}
+
+const SURFACE_NAME: Record<string, string> = { browser: "tab", window: "jendela", monitor: "layar" };
+const SCREEN_LOST =
+  "Berbagi layar berhenti, tetapi rekaman tetap berjalan. Klik “Bagikan ulang” agar audio peserta dan slide terekam lagi.";
+
+/** Chrome ends the share when the shared tab/window closes or reloads, Zoom swaps windows, or “Stop sharing” is clicked. */
+async function onScreenEnded(surface: string | undefined) {
+  watcher?.stop();
+  watcher = null;
+  if (!live || !recorder) return;
+  logEvent(`Berbagi ${SURFACE_NAME[surface ?? ""] ?? "layar"} diakhiri oleh browser`);
+  patch({ screenLost: true, hasSystemAudio: false, warnings: [...live.warnings.filter((w) => w !== SCREEN_LOST), SCREEN_LOST] });
+  notifyScreenLost();
+}
+
+function notifyScreenLost() {
+  try {
+    const ctx = new AudioContext();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.frequency.value = 880;
+    gain.gain.setValueAtTime(0.15, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.6);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.6);
+    osc.onended = () => void ctx.close();
+  } catch {
+    /* audio cue is best effort */
+  }
+  if (document.visibilityState === "hidden" && "Notification" in window && Notification.permission === "granted") {
+    new Notification("Notesy: berbagi layar berhenti", { body: "Audio tetap direkam. Buka Notesy dan klik Bagikan ulang.", tag: "notesy-screen" });
+  }
+}
+
+export async function reshareScreen() {
+  if (!recorder || !live) throw new Error("Tidak ada rekaman yang berjalan.");
+  await recorder.reshare();
+  watcher?.stop();
+  startWatcher();
+  logEvent("Layar dibagikan ulang");
+  patch({
+    screenLost: false,
+    hasSystemAudio: recorder.hasSystemAudio,
+    warnings: live.warnings.filter((w) => w !== SCREEN_LOST),
+  });
 }
 
 /** Phones suspend the WebView (and its microphone) when the screen turns off. */
@@ -170,6 +236,7 @@ export async function captureSlideNow() {
 export async function stopRecording() {
   if (!live || !recorder || live.state === "stopping") return;
   const { noteId } = live;
+  logEvent("Rekaman dihentikan oleh pengguna");
   patch({ state: "stopping" });
   watcher?.stop();
   watcher = null;
@@ -309,10 +376,10 @@ export async function recoverInterrupted() {
   for (const n of notes) {
     if (n.status.kind === "recording" || sessions.some((k) => k.startsWith(`${n.id}:`))) {
       if (live?.noteId === n.id) continue;
-      const channels = (["mic", "system", "mix"] as const).filter((c) => sessions.includes(`${n.id}:${c}`)).map((c) => [c, mime] as [Channel | "mix", string]);
-      const tracks = await finalizeTracks(n.id, channels);
+      const parts = sessions.filter((k) => parseSessionKey(k)?.noteId === n.id).map((session) => ({ session, mime }));
+      const tracks = await finalizeTracks(parts);
       await updateNote(n.id, (x) => {
-        if (tracks.length) x.audio = [...x.audio.filter((a) => !tracks.some((t) => t.channel === a.channel)), ...tracks];
+        if (tracks.length) x.audio = [...x.audio.filter((a) => !tracks.some((t) => t.blobKey === a.blobKey)), ...tracks];
         x.status = tracks.length
           ? { kind: "error", message: "Rekaman terputus (tab ditutup). Audio yang sempat tersimpan sudah dipulihkan — klik Transkrip ulang." }
           : { kind: "idle" };

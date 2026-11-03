@@ -175,6 +175,7 @@ a { color: inherit; }
 .meter-track { width: 64px; height: 5px; background: var(--panel); border-radius: 3px; overflow: hidden; }
 .meter-fill { display: block; height: 100%; background: var(--green); transform-origin: left; transition: transform 0.08s linear; }
 .live-warning { margin: 8px 0 0; color: var(--amber); font-size: 13px; }
+.live-alert { display: flex; align-items: center; gap: 12px; padding: 8px 12px; border-radius: var(--radius); background: var(--red-soft); color: var(--red); font-weight: 500; }
 .pip-body { margin: 0; background: var(--surface); color: var(--text); font-family: ui-sans-serif, -apple-system, "Segoe UI", sans-serif; font-size: 14px; }
 
 .banner { display: flex; align-items: center; gap: 10px; margin: 8px 32px 0; padding: 9px 12px; border-radius: var(--radius); background: var(--blue-soft); font-size: 13.5px; }

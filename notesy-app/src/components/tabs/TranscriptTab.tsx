@@ -166,6 +166,18 @@ export function TranscriptTab({ note, isLive }: { note: Note; isLive: boolean })
             ))}
           </div>
           <p className="fineprint">Klik waktu untuk memutar · klik dua kali kalimat untuk lompat · klik teks untuk mengedit · klik nama untuk mengganti.</p>
+          {!!note.events?.length && (
+            <details className="fineprint">
+              <summary>Catatan rekaman ({note.events.length})</summary>
+              <ul>
+                {note.events.map((ev, i) => (
+                  <li key={i}>
+                    {formatClock(ev.atMs)} · {ev.text}
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
         </>
       ) : (
         <div className="empty-state">

@@ -1,10 +1,11 @@
 import { useRef, useState } from "react";
-import { Camera, Mic, MicOff, Pause, Play, PictureInPicture2, Square, Wand2 } from "lucide-react";
+import { Camera, Mic, MicOff, MonitorUp, Pause, Play, PictureInPicture2, Square, Wand2 } from "lucide-react";
 import {
   captureSlideNow,
   getElapsed,
   getLevels,
   pauseRecording,
+  reshareScreen,
   resumeRecording,
   setAutoSlides,
   stopRecording,
@@ -58,6 +59,20 @@ export function LiveControls({ live, compact }: { live: LiveSession; compact?: b
       {live.hasMic && <Meter label="Saya" getter={() => getLevels().mic} />}
       {live.hasSystemAudio && <Meter label="Peserta" getter={() => getLevels().system} />}
       <div className="spacer" />
+      {live.screenLost && (
+        <button
+          className="icon-btn danger"
+          title="Berbagi layar berhenti. Klik untuk bagikan ulang."
+          onClick={() =>
+            reshareScreen().catch(() => {
+              window.focus();
+              toast("Berbagi layar berhenti. Klik “Bagikan ulang” di Notesy.", "error");
+            })
+          }
+        >
+          <MonitorUp size={16} />
+        </button>
+      )}
       {live.hasMic && (
         <button className={`icon-btn${live.micMuted ? " danger" : ""}`} onClick={toggleMic} title={live.micMuted ? "Nyalakan mikrofon" : "Bisukan mikrofon"}>
           {live.micMuted ? <MicOff size={16} /> : <Mic size={16} />}
@@ -100,13 +115,37 @@ export function LiveControls({ live, compact }: { live: LiveSession; compact?: b
   );
 }
 
+export function ReshareButton({ small }: { small?: boolean }) {
+  const [busy, setBusy] = useState(false);
+  return (
+    <button
+      className={`btn btn-primary${small ? " btn-small" : ""}`}
+      disabled={busy}
+      onClick={async () => {
+        setBusy(true);
+        try {
+          await reshareScreen();
+          toast("Layar dibagikan lagi. Audio peserta dan slide terekam kembali.", "success");
+        } catch (e) {
+          if (!(e instanceof DOMException && e.name === "NotAllowedError")) toastError(e);
+        } finally {
+          setBusy(false);
+        }
+      }}
+    >
+      <MonitorUp size={14} /> Bagikan ulang
+    </button>
+  );
+}
+
 export function LiveBar({ live }: { live: LiveSession }) {
   return (
     <div className="live-bar">
       <LiveControls live={live} />
       {live.warnings.map((w) => (
-        <p key={w} className="live-warning">
+        <p key={w} className={`live-warning${live.screenLost && w.startsWith("Berbagi layar berhenti") ? " live-alert" : ""}`}>
           {w}
+          {live.screenLost && w.startsWith("Berbagi layar berhenti") && <ReshareButton small />}
         </p>
       ))}
     </div>

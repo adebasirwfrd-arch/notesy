@@ -31,6 +31,8 @@ export interface AudioTrack {
   blobKey: string;
   mime: string;
   bytes: number;
+  /** Start of this part within the meeting, for audio re-shared after the screen share ended. */
+  offsetMs?: number;
 }
 
 export type NoteStatus =
@@ -60,6 +62,8 @@ export interface Note {
   language?: string;
   source?: "screen" | "mic" | "import";
   status: NoteStatus;
+  /** What happened to capture during recording (share ended, re-shared, stopped by user). */
+  events?: { atMs: number; text: string }[];
 }
 
 export interface Slide {
