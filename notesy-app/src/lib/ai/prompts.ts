@@ -113,6 +113,49 @@ ${transcriptText(note)}
 7. Panjang ${length}. Tanpa kata pembuka, tanpa penutup, tanpa code fence.${extraInstructions?.trim() ? `\n8. Instruksi tambahan pengguna: ${extraInstructions.trim()}` : ""}`;
 }
 
+export function momItemsPrompt(note: Note, language: string, attendees: string[], summary?: string) {
+  const minutes = Math.max(1, Math.round(note.durationMs / 60000));
+  const target = Math.min(40, Math.max(2, Math.round(minutes / 3)));
+  return `Susun daftar "Key points covered" untuk notulen rapat (MoM) dalam ${language}.
+
+## Data rapat
+- Judul: ${note.title}
+- Durasi: ${formatClock(note.durationMs)} (± ${minutes} menit)
+- Peserta terdaftar: ${attendees.join(", ") || "(tidak diisi)"}
+
+## Memo pengguna
+${note.memo.trim() || "(kosong)"}
+${summary ? `\n## Ringkasan rapat\n${summary}\n` : ""}
+## Transkrip
+${transcriptText(note)}
+
+## Aturan
+1. Satu baris untuk SETIAP topik/agenda berbeda yang benar-benar dibahas, urut sesuai waktu dibahas. Jangan menggabungkan topik berbeda, jangan memecah satu topik menjadi beberapa baris.
+2. Jumlah baris mengikuti isi rapat, bukan angka tetap. Sebagai patokan, rapat ${minutes} menit biasanya berisi sekitar ${target} topik; boleh lebih sedikit atau lebih banyak sesuai isi transkrip (maksimal 40).
+3. description: 1–2 kalimat padat: topik apa yang dibahas DAN hasilnya (keputusan, angka, temuan, tindak lanjut). Tulis nama, angka, dan istilah teknis persis seperti di transkrip.
+4. pic: nama orang/tim yang bertanggung jawab bila disebut jelas (utamakan ejaan dari daftar peserta). Jika tidak disebut, isi "-". Jangan mengarang nama.
+5. status: pilih salah satu: "Open" (perlu tindak lanjut), "In Progress" (sedang dikerjakan), "Closed" (selesai/sudah diputuskan), "Info" (hanya penyampaian informasi).
+6. Jangan memasukkan basa-basi, salam, atau gangguan teknis rapat sebagai topik.
+
+Balas HANYA JSON array tanpa code fence:
+[{"description":"...","pic":"...","status":"Open"}]`;
+}
+
+export function parseMomItems(raw: string): { description: string; pic: string; status: string }[] {
+  const start = raw.indexOf("[");
+  const end = raw.lastIndexOf("]");
+  if (start < 0 || end < start) return [];
+  try {
+    const arr = JSON.parse(raw.slice(start, end + 1));
+    if (!Array.isArray(arr)) return [];
+    return arr
+      .filter((x) => x && typeof x.description === "string" && x.description.trim())
+      .map((x) => ({ description: String(x.description).trim(), pic: String(x.pic ?? "-").trim() || "-", status: String(x.status ?? "Open").trim() || "Open" }));
+  } catch {
+    return [];
+  }
+}
+
 export function chatContext(note: Note, summary?: string) {
   return `Konteks rapat "${note.title}" (${formatDate(note.createdAt)}).
 

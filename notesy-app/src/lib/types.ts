@@ -64,6 +64,48 @@ export interface Note {
   status: NoteStatus;
   /** What happened to capture during recording (share ended, re-shared, stopped by user). */
   events?: { atMs: number; text: string }[];
+  mom?: Mom;
+}
+
+/** A signature as a trimmed transparent PNG data URL, either drawn on screen or uploaded. */
+export interface Signature {
+  kind: "drawn" | "image";
+  dataUrl: string;
+  width: number;
+  height: number;
+  signedAt: number;
+}
+
+export interface MomAttendee {
+  id: string;
+  name: string;
+  company: string;
+  empNo: string;
+  title: string;
+  signature?: Signature;
+}
+
+export interface MomItem {
+  id: string;
+  description: string;
+  pic: string;
+  status: string;
+}
+
+/** Minutes of meeting in the company "Meeting Roster" format. */
+export interface Mom {
+  date: string;
+  time: string;
+  location: string;
+  facilitator: string;
+  attendees: MomAttendee[];
+  items: MomItem[];
+  /** Set once the user edits the key points, so the AI never overwrites them. */
+  itemsEdited?: boolean;
+  itemsGeneratedAt?: number;
+  preparedBy: { name: string; position: string; signature?: Signature };
+  /** Slides shown as evidence; undefined means pick automatically. */
+  evidenceSlideIds?: string[];
 }
 
 export interface Slide {

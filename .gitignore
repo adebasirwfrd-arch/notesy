@@ -22,6 +22,11 @@ notesy-app/android/app/src/main/assets/public/
 *.apk
 .vercel/
 
+# Company MoM template (confidential, contains a real signature); loaded at runtime instead
+template/
+notesy-app/public/mom-template.docx
+notesy-app/public/__test/
+
 # Secrets
 .env
 .env.*

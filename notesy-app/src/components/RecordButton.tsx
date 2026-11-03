@@ -1,9 +1,14 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { ChevronDown, Mic, MonitorUp, Upload } from "lucide-react";
 import { startRecording, importAudioFile } from "../lib/session";
 import { canCaptureScreen } from "../lib/platform";
 import { toast, toastError } from "../lib/toast";
 import type { CaptureMode } from "../lib/recorder";
+import type { Mom } from "../lib/types";
+import { getNote, updateNote } from "../lib/db";
+import { saveLastForm } from "../lib/mom";
+import { MomStartDialog } from "./mom/MomStartDialog";
 
 interface Props {
   noteId?: string;
@@ -25,11 +30,29 @@ export function RecordButton({ noteId, onStarted, variant = "primary", label }: 
     return () => document.removeEventListener("mousedown", close);
   }, [open]);
 
-  const start = async (mode: CaptureMode) => {
+  const [form, setForm] = useState<{ mode: CaptureMode; initial?: Mom; title: string } | null>(null);
+
+  const askInfo = async (mode: CaptureMode) => {
     setOpen(false);
+    const note = noteId ? await getNote(noteId) : undefined;
+    setForm({ mode, initial: note?.mom, title: note && !note.titleIsAuto ? note.title : "" });
+  };
+
+  const start = async (mode: CaptureMode, mom?: Mom, title?: string) => {
+    setForm(null);
     setBusy(true);
     try {
       const id = await startRecording(mode, noteId);
+      if (mom || title) {
+        await updateNote(id, (n) => {
+          if (mom) n.mom = { ...(n.mom ?? {}), ...mom };
+          if (title) {
+            n.title = title;
+            n.titleIsAuto = false;
+          }
+        });
+        if (mom) void saveLastForm(mom);
+      }
       onStarted?.(id);
       if (mode === "screen") toast("Merekam. Notesy menangkap slide otomatis setiap kali layar berganti.", "success");
     } catch (e) {
@@ -54,7 +77,7 @@ export function RecordButton({ noteId, onStarted, variant = "primary", label }: 
 
   return (
     <div className={`record-split ${variant}`} ref={ref}>
-      <button className="btn btn-record" disabled={busy} onClick={() => start(primaryMode)}>
+      <button className="btn btn-record" disabled={busy} onClick={() => askInfo(primaryMode)}>
         <span className="rec-dot" />
         {label ?? (canCaptureScreen ? "Rekam rapat" : "Mulai rekam")}
       </button>
@@ -64,7 +87,7 @@ export function RecordButton({ noteId, onStarted, variant = "primary", label }: 
       {open && (
         <div className="menu" role="menu">
           {canCaptureScreen && (
-            <button role="menuitem" onClick={() => start("screen")}>
+            <button role="menuitem" onClick={() => askInfo("screen")}>
               <MonitorUp size={16} />
               <div>
                 <b>Layar + audio rapat</b>
@@ -72,7 +95,7 @@ export function RecordButton({ noteId, onStarted, variant = "primary", label }: 
               </div>
             </button>
           )}
-          <button role="menuitem" onClick={() => start("mic")}>
+          <button role="menuitem" onClick={() => askInfo("mic")}>
             <Mic size={16} />
             <div>
               <b>Mikrofon saja</b>
@@ -89,6 +112,17 @@ export function RecordButton({ noteId, onStarted, variant = "primary", label }: 
         </div>
       )}
       <input ref={fileRef} type="file" accept="audio/*,video/*" hidden onChange={(e) => onFile(e.target.files?.[0])} />
+      {form &&
+        createPortal(
+          <MomStartDialog
+            initial={form.initial}
+            title={form.title}
+            onClose={() => setForm(null)}
+            onSkip={() => start(form.mode)}
+            onStart={(mom, title) => start(form.mode, mom, title)}
+          />,
+          document.body,
+        )}
     </div>
   );
 }

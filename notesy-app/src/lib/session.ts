@@ -4,7 +4,7 @@ import { MeetingRecorder, finalizeTracks, parseSessionKey, pickMime, type Captur
 import { SlideWatcher, encodeFrame, saveSlide } from "./slides";
 import { dictionaryStore, getSettings } from "./settings";
 import { transcribeTracks } from "./stt";
-import { aiConfigured, describeSlides, generateSummary } from "./ai";
+import { aiConfigured, describeSlides, generateMomItems, generateSummary } from "./ai";
 import type { Channel, Note, NoteStatus } from "./types";
 import { errorMessage, formatDate, formatTime, uid } from "./util";
 
@@ -349,6 +349,14 @@ export async function processNote(noteId: string, opts: ProcessOptions = {}) {
       }
       await setStatus(noteId, { kind: "summarizing", detail: "AI menyusun ringkasan…" });
       await generateSummary(noteId, opts.templateId ?? s.defaultTemplateId, undefined, ctrl.signal);
+    }
+    note = (await getNote(noteId))!;
+    if (opts.summarize !== false && aiConfigured(s) && !note.mom?.itemsEdited && (doTranscribe || !note.mom?.items.length) && (note.transcript.length || note.memo.trim())) {
+      await setStatus(noteId, { kind: "summarizing", detail: "AI menyusun poin pembahasan MoM…" });
+      await generateMomItems(noteId, ctrl.signal).catch((e) => {
+        if (ctrl.signal.aborted) throw e;
+        console.warn("MoM key points failed", e);
+      });
     }
     await setStatus(noteId, { kind: "idle" });
   } catch (e) {

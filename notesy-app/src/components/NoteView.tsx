@@ -12,10 +12,12 @@ import { SummaryTab } from "./tabs/SummaryTab";
 import { MemoTab } from "./tabs/MemoTab";
 import { TranscriptTab } from "./tabs/TranscriptTab";
 import { SlidesTab } from "./tabs/SlidesTab";
+import { MomTab } from "./tabs/MomTab";
+import { downloadMom } from "../lib/mom/export";
 import { AskBar } from "./AskBar";
 import type { Note } from "../lib/types";
 
-type Tab = "summary" | "memo" | "transcript" | "slides";
+type Tab = "summary" | "mom" | "memo" | "transcript" | "slides";
 
 interface Props {
   noteId: string;
@@ -110,6 +112,7 @@ export function NoteView({ noteId, onNavigate, onToggleSidebar }: Props) {
 
   const tabs: { id: Tab; label: string; badge?: number }[] = [
     { id: "summary", label: "Ringkasan" },
+    { id: "mom", label: "MoM" },
     { id: "memo", label: "Memo" },
     { id: "transcript", label: "Transkrip" },
     { id: "slides", label: "Slide", badge: slides.length || undefined },
@@ -155,6 +158,12 @@ export function NoteView({ noteId, onNavigate, onToggleSidebar }: Props) {
                 <button onClick={() => exportAs("html")}>
                   <Download size={16} /> Ekspor HTML (siap cetak PDF)
                 </button>
+                <button onClick={() => downloadMom(note, "docx").catch(toastError)}>
+                  <FileText size={16} /> Unduh MoM (Word)
+                </button>
+                <button onClick={() => downloadMom(note, "pdf").catch(toastError)}>
+                  <Download size={16} /> Unduh MoM (PDF)
+                </button>
                 {note.audio.length > 0 && (
                   <button onClick={() => processNote(note.id, { transcribe: true, summarize: true })}>
                     <RefreshCw size={16} /> Transkrip & ringkas ulang
@@ -183,6 +192,7 @@ export function NoteView({ noteId, onNavigate, onToggleSidebar }: Props) {
 
       <section className="tab-body">
         {activeTab === "summary" && <SummaryTab note={note} slides={slides} isLive={isLive} onNavigate={onNavigate} />}
+        {activeTab === "mom" && <MomTab note={note} slides={slides} />}
         {activeTab === "memo" && <MemoTab note={note} isLive={isLive} />}
         {activeTab === "transcript" && <TranscriptTab note={note} isLive={isLive} />}
         {activeTab === "slides" && <SlidesTab note={note} slides={slides} isLive={isLive} />}

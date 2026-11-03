@@ -2,6 +2,7 @@ import { getBlob, getNote, listSlides, putSlide, updateNote } from "../db";
 import { allTemplates, dictionaryStore, getSettings } from "../settings";
 import type { ChatMessage, Note, Settings, Slide, SummaryDoc } from "../types";
 import { blobToBase64, uid } from "../util";
+import { emptyMom } from "../mom";
 import { CursorApiError, CursorClient, type PromptImage } from "./cursor";
 import { openaiChat, type ChatTurn } from "./openai";
 import {
@@ -9,6 +10,8 @@ import {
   CHAT_RULES,
   chatContext,
   describePrompt,
+  momItemsPrompt,
+  parseMomItems,
   parseSlideJson,
   parseSummary,
   summaryPrompt,
@@ -161,6 +164,27 @@ export async function generateSummary(
     }
   });
   return doc;
+}
+
+/** Fills the MoM "Key points covered" table: one row per topic actually discussed. */
+export async function generateMomItems(noteId: string, signal?: AbortSignal) {
+  const s = getSettings();
+  const note = await getNote(noteId);
+  if (!note) throw new Error("Catatan tidak ditemukan");
+  if (!note.transcript.length && !note.memo.trim()) throw new Error("Belum ada transkrip atau memo untuk disusun menjadi MoM.");
+  const summary = note.summaries.find((x) => x.id === note.activeSummaryId)?.markdown;
+  const attendees = (note.mom?.attendees ?? []).map((a) => a.name.trim()).filter(Boolean);
+  const raw = await ask(noteId, momItemsPrompt(note, s.summaryLanguage, attendees, summary), { signal });
+  const items = parseMomItems(raw);
+  if (!items.length) throw new Error("AI tidak mengembalikan poin pembahasan. Coba lagi.");
+  await updateNote(noteId, (n) => {
+    const mom = n.mom ?? emptyMom();
+    mom.items = items.map((x) => ({ id: uid("k_"), ...x }));
+    mom.itemsGeneratedAt = Date.now();
+    mom.itemsEdited = false;
+    n.mom = mom;
+  });
+  return items;
 }
 
 export async function chat(noteId: string, question: string, onDelta: (t: string) => void, signal?: AbortSignal) {
