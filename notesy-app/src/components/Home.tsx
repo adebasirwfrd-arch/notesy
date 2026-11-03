@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import { CheckCircle2, Circle, Menu, MonitorUp, Sparkles, Image as ImageIcon, FileAudio } from "lucide-react";
 import { useSettings } from "../lib/settings";
 import { aiConfigured, testConnection } from "../lib/ai";
-import { canCaptureScreen, isAndroid } from "../lib/platform";
+import { TARGET, canCaptureScreen, isAndroid } from "../lib/platform";
+import { cloudEnabled } from "../lib/stt/cloud";
 import { RecordButton } from "./RecordButton";
 
 interface Props {
@@ -36,7 +37,9 @@ export function Home({ onNavigate, onToggleSidebar }: Props) {
       <div className="home-body">
         <h1>Siap mencatat rapat</h1>
         <p className="lead">
-          {canCaptureScreen
+          {TARGET === "android"
+            ? "Rekam rapat lewat mikrofon. Pilih “Layar + mikrofon” agar slide di HP tertangkap otomatis, lalu AI menyusun ringkasan."
+            : canCaptureScreen
             ? "Klik Rekam rapat, pilih layar Teams/Zoom, dan centang “bagikan audio sistem”. Notesy merekam suara, menangkap slide, mentranskrip di perangkat ini, lalu AI menyusun ringkasan bergambar."
             : "Rekam rapat lewat mikrofon, tambahkan foto slide dari kamera, lalu AI menyusun ringkasan."}
         </p>
@@ -54,7 +57,13 @@ export function Home({ onNavigate, onToggleSidebar }: Props) {
             <CheckCircle2 className="ok" size={18} />
             <div>
               <b>Transkripsi</b>
-              <span>{settings.sttEngine === "browser" ? "Whisper di perangkat (tanpa kirim audio ke cloud)" : "Layanan API"}</span>
+              <span>
+                {settings.sttEngine !== "browser"
+                  ? "Layanan API"
+                  : cloudEnabled(settings)
+                    ? "Cloud (Groq) bila perangkat tidak sanggup"
+                    : "Whisper di perangkat (tanpa kirim audio ke cloud)"}
+              </span>
             </div>
           </button>
         </div>
@@ -63,7 +72,13 @@ export function Home({ onNavigate, onToggleSidebar }: Props) {
           <div>
             <MonitorUp size={18} />
             <b>Layar + audio</b>
-            <span>{isAndroid ? "Di Android: mikrofon. Untuk layar, gunakan Chrome di laptop." : "Teams/Zoom desktop, tab browser, atau seluruh layar."}</span>
+            <span>
+              {TARGET === "android"
+                ? "Slide di layar HP + suara lewat mikrofon. Audio panggilan dikunci Android."
+                : isAndroid
+                  ? "Di Android: mikrofon. Untuk layar, gunakan Chrome di laptop."
+                  : "Teams/Zoom desktop, tab browser, atau seluruh layar."}
+            </span>
           </div>
           <div>
             <ImageIcon size={18} />

@@ -10,10 +10,7 @@ const HARD_MAX_SEC = 60;
 const endsSentence = (t: string) => /[.!?…]["')\]]?\s*$/.test(t);
 
 /** Groups transcript segments into readable paragraphs: by speaker, at pauses, and at sentence ends once long. */
-export function paragraphs<T extends Segment>(
-  segments: T[],
-  speakerOf: (s: T) => string,
-): { speaker: string; items: T[] }[] {
+export function paragraphs<T extends Segment>(segments: T[], speakerOf: (s: T) => string): { speaker: string; items: T[] }[] {
   const out: { speaker: string; items: T[] }[] = [];
   for (const s of segments) {
     const last = out.at(-1);
@@ -22,10 +19,7 @@ export function paragraphs<T extends Segment>(
     if (last && prev && last.speaker === speaker) {
       const length = s.start - last.items[0].start;
       const pause = s.start - prev.end;
-      const split =
-        pause >= PAUSE_SEC ||
-        length >= HARD_MAX_SEC ||
-        (length >= SOFT_MAX_SEC && endsSentence(prev.text));
+      const split = pause >= PAUSE_SEC || length >= HARD_MAX_SEC || (length >= SOFT_MAX_SEC && endsSentence(prev.text));
       if (!split) {
         last.items.push(s);
         continue;

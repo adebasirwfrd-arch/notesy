@@ -13,8 +13,7 @@ export function transcriptText(note: Note, maxChars = 180_000) {
   const lines: string[] = [];
   for (const sec of note.cleanTranscript?.sections ?? []) {
     if (sec.title) lines.push(`## ${sec.title}`);
-    for (const p of sec.paragraphs)
-      lines.push(`[${formatClock(p.start * 1000)}] ${p.speaker}: ${p.text}`);
+    for (const p of sec.paragraphs) lines.push(`[${formatClock(p.start * 1000)}] ${p.speaker}: ${p.text}`);
   }
   if (lines.length) return clip(lines.join("\n"), maxChars);
   let last = "";
@@ -32,12 +31,7 @@ function clip(text: string, maxChars: number) {
   return `${text.slice(0, maxChars * 0.6)}\n…(bagian tengah dipotong karena terlalu panjang)…\n${text.slice(-maxChars * 0.4)}`;
 }
 
-export function transcriptAround(
-  note: Note,
-  tSec: number,
-  before = 60,
-  after = 120,
-) {
+export function transcriptAround(note: Note, tSec: number, before = 60, after = 120) {
   return note.transcript
     .filter((s) => s.end >= tSec - before && s.start <= tSec + after)
     .map((s) => `${speakerName(note, s)}: ${s.text}`)
@@ -77,37 +71,14 @@ export interface SummaryContext {
   micOnly?: boolean;
 }
 
-export function summaryPrompt({
-  note,
-  slides,
-  template,
-  language,
-  maxImages,
-  extraInstructions,
-  userName,
-  meLabel,
-  micOnly,
-}: SummaryContext) {
-  const speakers = [
-    ...new Set(note.transcript.map((s) => speakerName(note, s))),
-  ];
-  const words = note.transcript.reduce(
-    (n, s) => n + s.text.split(/\s+/).length,
-    0,
-  );
-  const length =
-    words < 600
-      ? "ringkas (± 150–300 kata)"
-      : words < 3000
-        ? "sedang (± 300–600 kata)"
-        : "lengkap (± 600–1200 kata)";
+export function summaryPrompt({ note, slides, template, language, maxImages, extraInstructions, userName, meLabel, micOnly }: SummaryContext) {
+  const speakers = [...new Set(note.transcript.map((s) => speakerName(note, s)))];
+  const words = note.transcript.reduce((n, s) => n + s.text.split(/\s+/).length, 0);
+  const length = words < 600 ? "ringkas (± 150–300 kata)" : words < 3000 ? "sedang (± 300–600 kata)" : "lengkap (± 600–1200 kata)";
   const usable = slides.filter((s) => !s.excluded);
   const slideList = usable.length
     ? usable
-        .map(
-          (s) =>
-            `- slide:${s.id} | menit ${formatClock(s.t)} | ${s.caption ?? "(tanpa caption)"}${s.description ? ` — ${s.description}` : ""}`,
-        )
+        .map((s) => `- slide:${s.id} | menit ${formatClock(s.t)} | ${s.caption ?? "(tanpa caption)"}${s.description ? ` — ${s.description}` : ""}`)
         .join("\n")
     : "(tidak ada)";
   const structure =
@@ -146,12 +117,7 @@ ${transcriptText(note)}
 7. Panjang ${length}. Tanpa kata pembuka, tanpa penutup, tanpa code fence.${extraInstructions?.trim() ? `\n8. Instruksi tambahan pengguna: ${extraInstructions.trim()}` : ""}`;
 }
 
-export function momItemsPrompt(
-  note: Note,
-  language: string,
-  attendees: string[],
-  summary?: string,
-) {
+export function momItemsPrompt(note: Note, language: string, attendees: string[], summary?: string) {
   const minutes = Math.max(1, Math.round(note.durationMs / 60000));
   const target = Math.min(40, Math.max(2, Math.round(minutes / 3)));
   return `Susun daftar "Key points covered" untuk notulen rapat (MoM) dalam ${language}.
@@ -179,9 +145,7 @@ Balas HANYA JSON array tanpa code fence:
 [{"description":"...","pic":"...","status":"Open"}]`;
 }
 
-export function parseMomItems(
-  raw: string,
-): { description: string; pic: string; status: string }[] {
+export function parseMomItems(raw: string): { description: string; pic: string; status: string }[] {
   const start = raw.indexOf("[");
   const end = raw.lastIndexOf("]");
   if (start < 0 || end < start) return [];
@@ -189,14 +153,8 @@ export function parseMomItems(
     const arr = JSON.parse(raw.slice(start, end + 1));
     if (!Array.isArray(arr)) return [];
     return arr
-      .filter(
-        (x) => x && typeof x.description === "string" && x.description.trim(),
-      )
-      .map((x) => ({
-        description: String(x.description).trim(),
-        pic: String(x.pic ?? "-").trim() || "-",
-        status: String(x.status ?? "Open").trim() || "Open",
-      }));
+      .filter((x) => x && typeof x.description === "string" && x.description.trim())
+      .map((x) => ({ description: String(x.description).trim(), pic: String(x.pic ?? "-").trim() || "-", status: String(x.status ?? "Open").trim() || "Open" }));
   } catch {
     return [];
   }
@@ -215,11 +173,7 @@ Dasarkan jawaban hanya pada transkrip, memo, dan ringkasan. Kutip waktu [mm:ss] 
 Gunakan Markdown seperlunya.`;
 
 export function parseSummary(raw: string) {
-  let text = raw
-    .trim()
-    .replace(/^```(?:markdown|md)?\s*/i, "")
-    .replace(/```\s*$/, "")
-    .trim();
+  let text = raw.trim().replace(/^```(?:markdown|md)?\s*/i, "").replace(/```\s*$/, "").trim();
   let title: string | undefined;
   const m = text.match(/^\s*(?:\*\*)?Judul(?:\*\*)?\s*:\s*(.+)\n/i);
   if (m) {
@@ -229,9 +183,7 @@ export function parseSummary(raw: string) {
   return { title, markdown: text };
 }
 
-export function parseSlideJson(
-  raw: string,
-): { id: string; caption?: string; description?: string; keep?: boolean }[] {
+export function parseSlideJson(raw: string): { id: string; caption?: string; description?: string; keep?: boolean }[] {
   const start = raw.indexOf("[");
   const end = raw.lastIndexOf("]");
   if (start < 0 || end < start) return [];
@@ -264,31 +216,13 @@ export function tidyPrompt(opts: {
   attendees: string[];
   glossary: string[];
 }) {
-  const {
-    title,
-    part,
-    parts,
-    before,
-    roster,
-    paragraphs,
-    fixedNames,
-    genericLabels,
-    attendees,
-    glossary,
-  } = opts;
-  const lines = paragraphs
-    .map(
-      (p) =>
-        `[P${p.index}] ${formatClock(p.start * 1000)} ${p.speaker}: ${p.text}`,
-    )
-    .join("\n");
+  const { title, part, parts, before, roster, paragraphs, fixedNames, genericLabels, attendees, glossary } = opts;
+  const lines = paragraphs.map((p) => `[P${p.index}] ${formatClock(p.start * 1000)} ${p.speaker}: ${p.text}`).join("\n");
   return `Rapikan bagian ${part} dari ${parts} transkrip rapat "${title}". Transkrip ini hasil speech-to-text: ada kata salah dengar, kata berulang, dan ucapan beberapa orang yang tercampur.
 
 Tugas:
 1. Kelompokkan per topik. Tulis judul topik singkat (maks 8 kata) pada baris "## Judul" setiap kali topik pembicaraan berganti.${
-    before
-      ? ` Bagian sebelumnya diakhiri dengan: "…${before}". Jika awal bagian ini masih melanjutkan pembicaraan itu, jangan tulis judul di awal.`
-      : ""
+    before ? ` Bagian sebelumnya diakhiri dengan: "…${before}". Jika awal bagian ini masih melanjutkan pembicaraan itu, jangan tulis judul di awal.` : ""
   }
 2. Tulis setiap paragraf dengan format persis: [P<nomor>] <Nama pembicara>: <teks rapi>
    <nomor> adalah nomor paragraf asal tempat kalimat itu dimulai. Satu paragraf asal boleh dipecah menjadi beberapa baris (nomor sama) jika jelas ada pergantian pembicara, misalnya tanya-jawab.
@@ -317,9 +251,7 @@ export function parseTidy(raw: string, starts: Map<number, number>) {
   }[] = [];
   const roster: string[] = [];
   let lastStart = 0;
-  for (const line of raw
-    .split("\n")
-    .map((l) => l.trim().replace(/^[*_-]+\s*|\s*[*_]+$/g, ""))) {
+  for (const line of raw.split("\n").map((l) => l.trim().replace(/^[*_-]+\s*|\s*[*_]+$/g, ""))) {
     const r = line.match(/^@\s*(.+)$/);
     if (r) {
       roster.push(r[1].trim());
@@ -330,9 +262,7 @@ export function parseTidy(raw: string, starts: Map<number, number>) {
       sections.push({ title: h[1].replace(/\*+/g, "").trim(), paragraphs: [] });
       continue;
     }
-    const p = line.match(
-      /^\[?P(\d+)\]?\s*(?:\d{1,2}:\d{2}(?::\d{2})?\s+)?([^:]{1,60}):\s*(.+)$/,
-    );
+    const p = line.match(/^\[?P(\d+)\]?\s*(?:\d{1,2}:\d{2}(?::\d{2})?\s+)?([^:]{1,60}):\s*(.+)$/);
     if (!p) continue;
     const start = starts.get(Number(p[1])) ?? lastStart;
     lastStart = start;

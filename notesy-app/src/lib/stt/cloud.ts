@@ -16,13 +16,7 @@ export const MAX_WAIT_MS = 20_000;
 /** After an outage or a rejected passcode, stop trying the cloud for a while instead of failing every window. */
 const FAILURE_PAUSE_MS = 120_000;
 
-const LANGUAGE_CODES: Record<string, string> = {
-  indonesian: "id",
-  english: "en",
-  malay: "ms",
-  javanese: "jv",
-  sundanese: "su",
-};
+const LANGUAGE_CODES: Record<string, string> = { indonesian: "id", english: "en", malay: "ms", javanese: "jv", sundanese: "su" };
 
 export class CloudBusyError extends Error {}
 
@@ -37,20 +31,16 @@ export function cloudPass(s: Settings) {
   return ai && !isCursorKey(ai) ? ai : "";
 }
 
-export const cloudEnabled = (s: Settings) =>
-  s.sttCloud !== "off" && !!cloudPass(s);
+export const cloudEnabled = (s: Settings) => s.sttCloud !== "off" && !!cloudPass(s);
 
 /** Milliseconds until the cloud accepts another request (rate-limit pause plus request spacing). */
-export const cloudWaitMs = () =>
-  Math.max(0, pausedUntil - Date.now(), nextAt - Date.now());
+export const cloudWaitMs = () => Math.max(0, pausedUntil - Date.now(), nextAt - Date.now());
 
-const endpoint = () =>
-  TARGET === "web" ? "/api/transcribe" : `${NOTESY_SERVER}/api/transcribe`;
+const endpoint = () => (TARGET === "web" ? "/api/transcribe" : `${NOTESY_SERVER}/api/transcribe`);
 
 function wav(pcm: Float32Array) {
   const out = new DataView(new ArrayBuffer(44 + pcm.length * 2));
-  const str = (o: number, s: string) =>
-    [...s].forEach((c, i) => out.setUint8(o + i, c.charCodeAt(0)));
+  const str = (o: number, s: string) => [...s].forEach((c, i) => out.setUint8(o + i, c.charCodeAt(0)));
   str(0, "RIFF");
   out.setUint32(4, 36 + pcm.length * 2, true);
   str(8, "WAVE");
@@ -64,8 +54,7 @@ function wav(pcm: Float32Array) {
   out.setUint16(34, 16, true);
   str(36, "data");
   out.setUint32(40, pcm.length * 2, true);
-  for (let i = 0; i < pcm.length; i++)
-    out.setInt16(44 + i * 2, Math.max(-1, Math.min(1, pcm[i])) * 0x7fff, true);
+  for (let i = 0; i < pcm.length; i++) out.setInt16(44 + i * 2, Math.max(-1, Math.min(1, pcm[i])) * 0x7fff, true);
   return out.buffer;
 }
 
@@ -78,23 +67,16 @@ export async function cloudTranscribe(
   context = "",
 ): Promise<{ chunks: CloudChunk[]; language?: string }> {
   const wait = cloudWaitMs();
-  if (Date.now() < pausedUntil && wait > MAX_WAIT_MS)
-    throw new CloudBusyError("Kuota cloud sedang penuh.");
+  if (Date.now() < pausedUntil && wait > MAX_WAIT_MS) throw new CloudBusyError("Kuota cloud sedang penuh.");
   nextAt = Math.max(Date.now(), nextAt) + MIN_GAP_MS;
   if (wait) await new Promise((r) => setTimeout(r, wait));
   const params = new URLSearchParams();
-  if (s.sttLanguage !== "auto")
-    params.set("language", s.sttLanguage === "jv" ? "jw" : s.sttLanguage);
+  if (s.sttLanguage !== "auto") params.set("language", s.sttLanguage === "jv" ? "jw" : s.sttLanguage);
   const terms = dict.map((d) => d.term).slice(0, 60);
   // Whisper copies the prompt's style: without punctuated text before it, it returns one unpunctuated run-on.
-  const seed =
-    s.sttLanguage === "en"
-      ? "Okay, everyone. Let's get started, shall we?"
-      : "Baik, Bapak dan Ibu. Kita mulai, ya? Silakan.";
+  const seed = s.sttLanguage === "en" ? "Okay, everyone. Let's get started, shall we?" : "Baik, Bapak dan Ibu. Kita mulai, ya? Silakan.";
   const prior = /[.?!]/.test(context) ? context.slice(-240) : seed;
-  const prompt = [terms.length ? `Istilah: ${terms.join(", ")}.` : "", prior]
-    .filter(Boolean)
-    .join(" ");
+  const prompt = [terms.length ? `Istilah: ${terms.join(", ")}.` : "", prior].filter(Boolean).join(" ");
   if (prompt) params.set("prompt", prompt);
   let res: Response;
   try {
@@ -110,9 +92,7 @@ export async function cloudTranscribe(
   }
   if (res.status === 429) {
     const retry = Number(res.headers.get("retry-after"));
-    pausedUntil =
-      Date.now() +
-      (Number.isFinite(retry) && retry > 0 ? retry * 1000 : 30_000);
+    pausedUntil = Date.now() + (Number.isFinite(retry) && retry > 0 ? retry * 1000 : 30_000);
     throw new CloudBusyError("Kuota cloud sedang penuh.");
   }
   const json = (await res.json().catch(() => ({}))) as {
@@ -125,12 +105,7 @@ export async function cloudTranscribe(
     throw new Error(json.message ?? `Server transkripsi ${res.status}`);
   }
   const lang = json.language?.toLowerCase();
-  return {
-    chunks: json.segments ?? [],
-    language: lang
-      ? (LANGUAGE_CODES[lang] ?? (lang.length <= 3 ? lang : undefined))
-      : undefined,
-  };
+  return { chunks: json.segments ?? [], language: lang ? (LANGUAGE_CODES[lang] ?? (lang.length <= 3 ? lang : undefined)) : undefined };
 }
 
 /** Checks the passcode and that the server has a Groq key. */
@@ -142,7 +117,6 @@ export async function testCloud(s: Settings): Promise<string> {
     message?: string;
     model?: string;
   };
-  if (!res.ok)
-    throw new Error(json.message ?? `Server transkripsi ${res.status}`);
+  if (!res.ok) throw new Error(json.message ?? `Server transkripsi ${res.status}`);
   return json.model ?? "ok";
 }

@@ -23,12 +23,10 @@ function subscribe(f: Listener) {
   const onExt = (m: { type?: string; names?: string[]; lagMs?: number }) => {
     if (m?.type === "notesy-speaking") f(m.names ?? [], m.lagMs ?? 0);
   };
-  if (isExtension && typeof chrome !== "undefined")
-    chrome.runtime?.onMessage?.addListener(onExt);
+  if (isExtension && typeof chrome !== "undefined") chrome.runtime?.onMessage?.addListener(onExt);
   return () => {
     window.removeEventListener("message", onWindow);
-    if (isExtension && typeof chrome !== "undefined")
-      chrome.runtime?.onMessage?.removeListener(onExt);
+    if (isExtension && typeof chrome !== "undefined") chrome.runtime?.onMessage?.removeListener(onExt);
   };
 }
 
@@ -48,8 +46,7 @@ export class SpeakerTracker {
   ) {
     this.unsubscribe = subscribe((names, lag) => this.update(names, lag));
     this.timer = setInterval(() => {
-      if (this.open.size && Date.now() - this.lastMessage > STALE_MS)
-        this.update([], 0);
+      if (this.open.size && Date.now() - this.lastMessage > STALE_MS) this.update([], 0);
       if (Date.now() - this.lastSave > SAVE_EVERY_MS) void this.save();
     }, 1000);
   }
@@ -59,12 +56,10 @@ export class SpeakerTracker {
     const now = Math.max(0, this.clock() - lagMs);
     for (const [name, start] of this.open) {
       if (names.includes(name)) continue;
-      if (now - start >= 300)
-        this.spans.push({ startMs: start, endMs: now, name });
+      if (now - start >= 300) this.spans.push({ startMs: start, endMs: now, name });
       this.open.delete(name);
     }
-    for (const name of names)
-      if (!this.open.has(name)) this.open.set(name, now);
+    for (const name of names) if (!this.open.has(name)) this.open.set(name, now);
   }
 
   private async save() {
@@ -86,11 +81,7 @@ export class SpeakerTracker {
 }
 
 /** Gives segments the Meet/Teams name of whoever spoke most during them. Mic lines stay with the local user. */
-export function assignSpeakers(
-  segments: Segment[],
-  timeline: SpeakerSpan[] | undefined,
-  meLabel: string,
-): Segment[] {
+export function assignSpeakers(segments: Segment[], timeline: SpeakerSpan[] | undefined, meLabel: string): Segment[] {
   if (!timeline?.length) return segments;
   const spans = [...timeline].sort((a, b) => a.startMs - b.startMs);
   const maxLen = Math.max(...spans.map((s) => s.endMs - s.startMs));

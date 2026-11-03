@@ -1,12 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import {
-  Copy,
-  Download,
-  FileAudio,
-  RefreshCw,
-  Search,
-  Sparkles,
-} from "lucide-react";
+import { Copy, Download, FileAudio, RefreshCw, Search, Sparkles } from "lucide-react";
 import { usePlayableAudio } from "../../lib/hooks";
 import { updateNote } from "../../lib/db";
 import { isProcessing, processNote } from "../../lib/session";
@@ -20,22 +13,9 @@ import { paragraphs } from "../../lib/paragraphs";
 import { useSettings } from "../../lib/settings";
 import type { Note } from "../../lib/types";
 
-const COLORS = [
-  "#2563eb",
-  "#db2777",
-  "#059669",
-  "#d97706",
-  "#7c3aed",
-  "#0891b2",
-];
+const COLORS = ["#2563eb", "#db2777", "#059669", "#d97706", "#7c3aed", "#0891b2"];
 
-export function TranscriptTab({
-  note,
-  isLive,
-}: {
-  note: Note;
-  isLive: boolean;
-}) {
+export function TranscriptTab({ note, isLive }: { note: Note; isLive: boolean }) {
   const track = note.audio.find((a) => a.channel === "mix") ?? note.audio[0];
   const url = usePlayableAudio(track?.blobKey)?.url;
   const audio = useRef<HTMLAudioElement>(null);
@@ -55,9 +35,7 @@ export function TranscriptTab({
     return clean.sections
       .map((sec) => ({
         ...sec,
-        paragraphs: sec.paragraphs.filter((p) =>
-          p.text.toLowerCase().includes(term),
-        ),
+        paragraphs: sec.paragraphs.filter((p) => p.text.toLowerCase().includes(term)),
       }))
       .filter((sec) => sec.paragraphs.length);
   }, [clean, q]);
@@ -67,21 +45,11 @@ export function TranscriptTab({
       toast("Atur Intelligence (API key Cursor) di Pengaturan dulu.", "error");
       return;
     }
-    if (
-      note.cleanTranscript &&
-      !confirm("Rapikan ulang? Versi rapi saat ini akan diganti.")
-    )
-      return;
+    if (note.cleanTranscript && !confirm("Rapikan ulang? Versi rapi saat ini akan diganti.")) return;
     setTidying("Menyiapkan…");
     setView("clean");
     try {
-      await tidyTranscript(note.id, (done, total) =>
-        setTidying(
-          total > 1
-            ? `Merapikan… ${done}/${total} bagian`
-            : "Merapikan…",
-        ),
-      );
+      await tidyTranscript(note.id, (done, total) => setTidying(total > 1 ? `Merapikan… ${done}/${total} bagian` : "Merapikan…"));
       toast("Transkrip dirapikan", "success", 1500);
     } catch (e) {
       toast(errorMessage(e), "error");
@@ -90,44 +58,28 @@ export function TranscriptTab({
     }
   };
 
-  const speakers = useMemo(
-    () => [...new Set(note.transcript.map((s) => s.speaker))],
-    [note.transcript],
-  );
-  const color = (sp: string) =>
-    COLORS[Math.max(0, speakers.indexOf(sp)) % COLORS.length];
+  const speakers = useMemo(() => [...new Set(note.transcript.map((s) => s.speaker))], [note.transcript]);
+  const color = (sp: string) => COLORS[Math.max(0, speakers.indexOf(sp)) % COLORS.length];
   const cleanSpeakers = useMemo(
-    () => [
-      ...new Set(
-        (note.cleanTranscript?.sections ?? []).flatMap((sec) =>
-          sec.paragraphs.map((p) => p.speaker),
-        ),
-      ),
-    ],
+    () => [...new Set((note.cleanTranscript?.sections ?? []).flatMap((sec) => sec.paragraphs.map((p) => p.speaker)))],
     [note.cleanTranscript],
   );
 
   const groups = useMemo(() => {
     const term = q.trim().toLowerCase();
-    const segs = term
-      ? note.transcript.filter((s) => s.text.toLowerCase().includes(term))
-      : note.transcript;
+    const segs = term ? note.transcript.filter((s) => s.text.toLowerCase().includes(term)) : note.transcript;
     if (term) return segs.map((s) => ({ speaker: s.speaker, items: [s] }));
     return paragraphs(segs, (s) => s.speaker);
   }, [note.transcript, q]);
 
   const activeId = useMemo(() => {
-    const seg = note.transcript.find(
-      (s) => time >= s.start && time < Math.max(s.end, s.start + 0.5),
-    );
+    const seg = note.transcript.find((s) => time >= s.start && time < Math.max(s.end, s.start + 0.5));
     return seg?.id;
   }, [time, note.transcript]);
 
   useEffect(() => {
     if (!follow || !activeId || audio.current?.paused) return;
-    listRef.current
-      ?.querySelector(`[data-seg="${activeId}"]`)
-      ?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    listRef.current?.querySelector(`[data-seg="${activeId}"]`)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }, [activeId, follow]);
 
   const seek = (t: number) => {
@@ -147,9 +99,7 @@ export function TranscriptTab({
 
   const editSegment = (id: string, text: string) =>
     updateNote(note.id, (n) => {
-      n.transcript = n.transcript.map((s) =>
-        s.id === id ? { ...s, text } : s,
-      );
+      n.transcript = n.transcript.map((s) => (s.id === id ? { ...s, text } : s));
     });
 
   if (isLive && !note.transcript.length)
@@ -173,19 +123,14 @@ export function TranscriptTab({
             src={url}
             controls
             preload="metadata"
-            onTimeUpdate={(e) =>
-              setTime((e.target as HTMLAudioElement).currentTime)
-            }
+            onTimeUpdate={(e) => setTime((e.target as HTMLAudioElement).currentTime)}
           />
           <button
             className="icon-btn"
             title="Unduh audio"
             onClick={async () => {
               const r = await fetch(url);
-              download(
-                `${safeFileName(note.title)}.${track.mime.includes("mp4") ? "m4a" : "webm"}`,
-                await r.blob(),
-              );
+              download(`${safeFileName(note.title)}.${track.mime.includes("mp4") ? "m4a" : "webm"}`, await r.blob());
             }}
           >
             <Download size={16} />
@@ -198,37 +143,21 @@ export function TranscriptTab({
           <div className="transcript-toolbar">
             <label className="search small">
               <Search size={14} />
-              <input
-                placeholder="Cari di transkrip"
-                value={q}
-                onChange={(e) => setQ(e.target.value)}
-              />
+              <input placeholder="Cari di transkrip" value={q} onChange={(e) => setQ(e.target.value)} />
             </label>
             <div className="speaker-legend">
               {speakers.map((sp) => (
-                <button
-                  key={sp}
-                  className="speaker-chip"
-                  style={{ "--c": color(sp) } as React.CSSProperties}
-                  onClick={() => rename(sp)}
-                  title="Klik untuk ganti nama"
-                >
+                <button key={sp} className="speaker-chip" style={{ "--c": color(sp) } as React.CSSProperties} onClick={() => rename(sp)} title="Klik untuk ganti nama">
                   {note.speakerNames[sp] || sp || "Pembicara"}
                 </button>
               ))}
             </div>
             {note.cleanTranscript && (
               <div className="segmented small">
-                <button
-                  className={view === "clean" ? "active" : ""}
-                  onClick={() => setView("clean")}
-                >
+                <button className={view === "clean" ? "active" : ""} onClick={() => setView("clean")}>
                   Rapi
                 </button>
-                <button
-                  className={view === "raw" ? "active" : ""}
-                  onClick={() => setView("raw")}
-                >
+                <button className={view === "raw" ? "active" : ""} onClick={() => setView("raw")}>
                   Asli
                 </button>
               </div>
@@ -239,26 +168,15 @@ export function TranscriptTab({
               onClick={tidy}
               title="AI menambah judul topik, menebak pembicara, dan membetulkan kata salah dengar"
             >
-              <Sparkles size={14} />{" "}
-              {tidying ??
-                (note.cleanTranscript ? "Rapikan ulang" : "Rapikan dengan AI")}
+              <Sparkles size={14} /> {tidying ?? (note.cleanTranscript ? "Rapikan ulang" : "Rapikan dengan AI")}
             </button>
             <label className="toggle small">
-              <input
-                type="checkbox"
-                checked={follow}
-                onChange={(e) => setFollow(e.target.checked)}
-              />{" "}
-              Ikuti audio
+              <input type="checkbox" checked={follow} onChange={(e) => setFollow(e.target.checked)} /> Ikuti audio
             </label>
             <button
               className="icon-btn"
               title="Salin transkrip"
-              onClick={() =>
-                navigator.clipboard
-                  .writeText(transcriptMarkdown(note))
-                  .then(() => toast("Disalin", "success", 1200))
-              }
+              onClick={() => navigator.clipboard.writeText(transcriptMarkdown(note)).then(() => toast("Disalin", "success", 1200))}
             >
               <Copy size={16} />
             </button>
@@ -267,16 +185,7 @@ export function TranscriptTab({
                 className="icon-btn"
                 title="Transkrip ulang"
                 disabled={isProcessing(note.id)}
-                onClick={() =>
-                  confirm(
-                    "Transkrip ulang akan mengganti transkrip saat ini. Lanjutkan?",
-                  ) &&
-                  processNote(note.id, {
-                    transcribe: true,
-                    fresh: true,
-                    summarize: false,
-                  })
-                }
+                onClick={() => confirm("Transkrip ulang akan mengganti transkrip saat ini. Lanjutkan?") && processNote(note.id, { transcribe: true, fresh: true, summarize: false })}
               >
                 <RefreshCw size={16} />
               </button>
@@ -293,11 +202,7 @@ export function TranscriptTab({
                         <span
                           className="speaker"
                           style={{
-                            color:
-                              COLORS[
-                                Math.max(0, cleanSpeakers.indexOf(p.speaker)) %
-                                  COLORS.length
-                              ],
+                            color: COLORS[Math.max(0, cleanSpeakers.indexOf(p.speaker)) % COLORS.length],
                           }}
                         >
                           {p.speaker}
@@ -317,17 +222,10 @@ export function TranscriptTab({
               {groups.map((g, i) => (
                 <div className="turn" key={`${g.items[0].id}-${i}`}>
                   <div className="turn-head">
-                    <button
-                      className="speaker"
-                      style={{ color: color(g.speaker) }}
-                      onClick={() => rename(g.speaker)}
-                    >
+                    <button className="speaker" style={{ color: color(g.speaker) }} onClick={() => rename(g.speaker)}>
                       {speakerName(note, g.items[0])}
                     </button>
-                    <button
-                      className="ts"
-                      onClick={() => seek(g.items[0].start)}
-                    >
+                    <button className="ts" onClick={() => seek(g.items[0].start)}>
                       {formatClock(g.items[0].start * 1000)}
                     </button>
                   </div>
@@ -376,16 +274,9 @@ export function TranscriptTab({
           <FileAudio size={22} />
           {note.audio.length ? (
             <>
-              <p>
-                {["transcribing"].includes(note.status.kind)
-                  ? "Sedang mentranskrip…"
-                  : "Audio tersedia tetapi belum ditranskrip."}
-              </p>
+              <p>{["transcribing"].includes(note.status.kind) ? "Sedang mentranskrip…" : "Audio tersedia tetapi belum ditranskrip."}</p>
               {note.status.kind !== "transcribing" && (
-                <button
-                  className="btn btn-primary"
-                  onClick={() => processNote(note.id, { transcribe: true })}
-                >
+                <button className="btn btn-primary" onClick={() => processNote(note.id, { transcribe: true })}>
                   Transkrip sekarang
                 </button>
               )}

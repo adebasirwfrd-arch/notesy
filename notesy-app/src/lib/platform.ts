@@ -5,7 +5,8 @@ export const isExtension = TARGET === "extension" || (typeof chrome !== "undefin
 export const isAndroid = TARGET === "android" || /Android/i.test(navigator.userAgent);
 export const isMobile = isAndroid || /iPhone|iPad/i.test(navigator.userAgent);
 
-export const canCaptureScreen = !isMobile && !!navigator.mediaDevices?.getDisplayMedia;
+/** The Android app captures the screen natively (slides only; Android keeps call audio private). */
+export const canCaptureScreen = TARGET === "android" || (!isMobile && !!navigator.mediaDevices?.getDisplayMedia);
 export const hasDocumentPip = typeof window !== "undefined" && "documentPictureInPicture" in window;
 export const hasWebGPU = typeof navigator !== "undefined" && "gpu" in navigator;
 

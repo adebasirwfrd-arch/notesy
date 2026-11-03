@@ -18,6 +18,7 @@ import { useTick } from "../lib/hooks";
 import { formatClock } from "../lib/util";
 import { toast, toastError } from "../lib/toast";
 import { hasDocumentPip } from "../lib/platform";
+import { hasNativeCapture } from "../lib/native-capture";
 import { openPip } from "./PipBar";
 
 export function Meter({ label, getter }: { label: string; getter: () => number }) {
@@ -86,7 +87,7 @@ export function LiveControls({ live, compact }: { live: LiveSession; compact?: b
             <Camera size={16} />
             {!compact && live.slideCount > 0 && <span className="count">{live.slideCount}</span>}
           </button>
-          {!compact && (
+          {!compact && !hasNativeCapture && (
             <button className={`icon-btn${live.autoSlides ? " active" : ""}`} onClick={() => setAutoSlides(!live.autoSlides)} title="Tangkap slide otomatis">
               <Wand2 size={16} />
             </button>

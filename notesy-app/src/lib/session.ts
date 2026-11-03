@@ -1,33 +1,14 @@
 import { useSyncExternalStore } from "react";
-import {
-  deleteNote,
-  getNote,
-  listNotes,
-  orphanChunkSessions,
-  putBlob,
-  putNote,
-  updateNote,
-} from "./db";
-import {
-  MeetingRecorder,
-  finalizeTracks,
-  parseSessionKey,
-  pickMime,
-  type CaptureMode,
-  type Levels,
-} from "./recorder";
+import { deleteNote, getNote, listNotes, orphanChunkSessions, putBlob, putNote, updateNote } from "./db";
+import { MeetingRecorder, finalizeTracks, parseSessionKey, pickMime, type CaptureMode, type Levels } from "./recorder";
 import { SlideWatcher, encodeFrame, saveSlide } from "./slides";
 import { dictionaryStore, getSettings } from "./settings";
 import { dropEcho, transcribeTracks } from "./stt";
 import { LiveTranscriber } from "./stt/live";
 import { SpeakerTracker, assignSpeakers } from "./speakers";
+import { NativeCapture, hasNativeCapture } from "./native-capture";
 import { TranscriptWriter } from "./stt/writer";
-import {
-  aiConfigured,
-  describeSlides,
-  generateMomItems,
-  generateSummary,
-} from "./ai";
+import { aiConfigured, describeSlides, generateMomItems, generateSummary } from "./ai";
 import type { Channel, Note, NoteStatus } from "./types";
 import { errorMessage, formatDate, formatTime, uid } from "./util";
 
@@ -50,11 +31,9 @@ let recorder: MeetingRecorder | null = null;
 let watcher: SlideWatcher | null = null;
 let liveStt: LiveTranscriber | null = null;
 let speakerTracker: SpeakerTracker | null = null;
+let nativeCapture: NativeCapture | null = null;
 /** Live transcribers still finishing queued speech after their recording stopped. */
-const liveDrains = new Map<
-  string,
-  { stt: LiveTranscriber; done: Promise<void> }
->();
+const liveDrains = new Map<string, { stt: LiveTranscriber; done: Promise<void> }>();
 const subs = new Set<() => void>();
 const set = (next: LiveSession | null) => {
   live = next;
@@ -71,10 +50,7 @@ let releaseRecordingLock: (() => void) | null = null;
 
 function holdRecordingLock(noteId: string) {
   if (!navigator.locks) return;
-  void navigator.locks.request(
-    LOCK_PREFIX + noteId,
-    () => new Promise<void>((resolve) => (releaseRecordingLock = resolve)),
-  );
+  void navigator.locks.request(LOCK_PREFIX + noteId, () => new Promise<void>((resolve) => (releaseRecordingLock = resolve)));
 }
 
 function dropRecordingLock() {
@@ -85,12 +61,7 @@ function dropRecordingLock() {
 async function notesRecordingElsewhere() {
   if (!navigator.locks) return new Set<string>();
   const { held = [] } = await navigator.locks.query();
-  return new Set(
-    held
-      .map((l) => l.name ?? "")
-      .filter((n) => n.startsWith(LOCK_PREFIX))
-      .map((n) => n.slice(LOCK_PREFIX.length)),
-  );
+  return new Set(held.map((l) => l.name ?? "").filter((n) => n.startsWith(LOCK_PREFIX)).map((n) => n.slice(LOCK_PREFIX.length)));
 }
 
 export const useLiveSession = () =>
@@ -100,8 +71,7 @@ export const useLiveSession = () =>
   );
 
 export const getElapsed = () => recorder?.elapsed() ?? 0;
-export const getLevels = (): Levels =>
-  recorder?.levels() ?? { mic: 0, system: 0 };
+export const getLevels = (): Levels => recorder?.levels() ?? { mic: 0, system: 0 };
 export const getDisplayStream = () => recorder?.display ?? null;
 
 export function newNote(partial: Partial<Note> = {}): Note {
@@ -130,10 +100,7 @@ export async function createEmptyNote() {
   return note;
 }
 
-export async function startRecording(
-  mode: CaptureMode,
-  existingNoteId?: string,
-): Promise<string> {
+export async function startRecording(mode: CaptureMode, existingNoteId?: string): Promise<string> {
   if (live) throw new Error("Rekaman lain masih berjalan.");
   const s = getSettings();
   let note = existingNoteId ? await getNote(existingNoteId) : undefined;
@@ -156,12 +123,8 @@ export async function startRecording(
     autoSlides: s.captureSlides,
     screenLost: false,
   });
-  const rec = new MeetingRecorder({
-    noteId,
-    mode,
-    micDeviceId: s.micDeviceId,
-    echoCancellation: s.echoCancellation,
-  });
+  // The Android app records the mic in the page and the screen natively, since its WebView cannot share the screen.
+  const rec = new MeetingRecorder({ noteId, mode: hasNativeCapture ? "mic" : mode, micDeviceId: s.micDeviceId, echoCancellation: s.echoCancellation });
   try {
     await rec.start();
   } catch (e) {
@@ -171,10 +134,7 @@ export async function startRecording(
       const n = await getNote(noteId);
       if (n && !n.memo && !n.audio.length) await deleteNote(noteId);
     }
-    if (e instanceof DOMException && e.name === "NotAllowedError")
-      throw new Error(
-        "Izin ditolak. Pilih layar/izinkan mikrofon untuk mulai merekam.",
-      );
+    if (e instanceof DOMException && e.name === "NotAllowedError") throw new Error("Izin ditolak. Pilih layar/izinkan mikrofon untuk mulai merekam.");
     throw e;
   }
   recorder = rec;
@@ -190,18 +150,9 @@ export async function startRecording(
   };
   rec.onMicRestored = () => {
     logEvent("Mikrofon tersambung lagi");
-    patch({
-      hasMic: true,
-      micMuted: false,
-      warnings: (live?.warnings ?? []).filter((w) => w !== MIC_LOST),
-    });
+    patch({ hasMic: true, micMuted: false, warnings: (live?.warnings ?? []).filter((w) => w !== MIC_LOST) });
   };
-  if (
-    mode === "screen" &&
-    "Notification" in window &&
-    Notification.permission === "default"
-  )
-    void Notification.requestPermission().catch(() => {});
+  if (mode === "screen" && "Notification" in window && Notification.permission === "default") void Notification.requestPermission().catch(() => {});
   const startedAt = Date.now();
   await updateNote(noteId, (n) => {
     n.status = { kind: "recording" };
@@ -218,6 +169,7 @@ export async function startRecording(
   startLiveTranscription(noteId, rec);
   speakerTracker = new SpeakerTracker(noteId, () => rec.elapsed());
   startWatcher();
+  if (hasNativeCapture) await startNativeCapture(noteId, rec, mode === "screen" && s.captureSlides);
   set({
     ...live!,
     state: "recording",
@@ -226,26 +178,18 @@ export async function startRecording(
     hasSystemAudio: rec.hasSystemAudio,
   });
   window.addEventListener("beforeunload", warnUnload);
-  if (mode === "mic")
-    wakeLock = await navigator.wakeLock?.request("screen").catch(() => null);
+  if (mode === "mic") wakeLock = await navigator.wakeLock?.request("screen").catch(() => null);
   return noteId;
 }
 
 function startLiveTranscription(noteId: string, rec: MeetingRecorder) {
   const s = getSettings();
   if (s.sttEngine !== "browser" || !s.liveTranscribe) return;
-  const stt = new LiveTranscriber(
-    noteId,
-    s,
-    () => rec.elapsed(),
-    (ch) => (ch === "mic" ? s.meLabel : s.othersLabel),
-    dictionaryStore.get(),
-  );
+  const stt = new LiveTranscriber(noteId, s, () => rec.elapsed(), (ch) => (ch === "mic" ? s.meLabel : s.othersLabel), dictionaryStore.get());
   liveStt = stt;
   rec.onAudioAttached = (ch, stream) => void stt.attach(ch, stream);
   rec.onAudioDetached = (ch) => stt.detach(ch);
-  for (const { channel, stream } of rec.audioStreams())
-    void stt.attach(channel, stream);
+  for (const { channel, stream } of rec.audioStreams()) void stt.attach(channel, stream);
 }
 
 function startWatcher() {
@@ -273,30 +217,19 @@ function logEvent(text: string) {
   });
 }
 
-const SURFACE_NAME: Record<string, string> = {
-  browser: "tab",
-  window: "jendela",
-  monitor: "layar",
-};
+const SURFACE_NAME: Record<string, string> = { browser: "tab", window: "jendela", monitor: "layar" };
 export const SCREEN_LOST =
   "Berbagi layar berhenti, tetapi rekaman tetap berjalan. Klik “Bagikan ulang” agar audio peserta dan slide terekam lagi.";
 export const AUDIO_LOST =
   "Audio peserta terputus (perangkat audio berganti, misalnya karena panggilan masuk). Rekaman tetap berjalan. Klik “Bagikan ulang” untuk menyambungkannya lagi.";
-const MIC_LOST =
-  "Mikrofon terputus. Notesy menyambungkannya lagi secara otomatis.";
+const MIC_LOST = "Mikrofon terputus. Notesy menyambungkannya lagi secara otomatis.";
 const ALERTS = [SCREEN_LOST, AUDIO_LOST];
 
-const addWarning = (w: string) => [
-  ...(live?.warnings ?? []).filter((x) => x !== w),
-  w,
-];
+const addWarning = (w: string) => [...(live?.warnings ?? []).filter((x) => x !== w), w];
 
 function raiseAlert(text: string) {
   if (!live) return;
-  patch({
-    screenLost: true,
-    warnings: [...live.warnings.filter((w) => !ALERTS.includes(w)), text],
-  });
+  patch({ screenLost: true, warnings: [...live.warnings.filter((w) => !ALERTS.includes(w)), text] });
   notifyScreenLost();
 }
 
@@ -305,9 +238,7 @@ async function onScreenEnded(surface: string | undefined) {
   watcher?.stop();
   watcher = null;
   if (!live || !recorder) return;
-  logEvent(
-    `Berbagi ${SURFACE_NAME[surface ?? ""] ?? "layar"} diakhiri oleh browser`,
-  );
+  logEvent(`Berbagi ${SURFACE_NAME[surface ?? ""] ?? "layar"} diakhiri oleh browser`);
   raiseAlert(SCREEN_LOST);
   patch({ hasSystemAudio: false });
 }
@@ -327,15 +258,8 @@ function notifyScreenLost() {
   } catch {
     /* audio cue is best effort */
   }
-  if (
-    document.visibilityState === "hidden" &&
-    "Notification" in window &&
-    Notification.permission === "granted"
-  ) {
-    new Notification("Notesy: berbagi layar berhenti", {
-      body: "Audio tetap direkam. Buka Notesy dan klik Bagikan ulang.",
-      tag: "notesy-screen",
-    });
+  if (document.visibilityState === "hidden" && "Notification" in window && Notification.permission === "granted") {
+    new Notification("Notesy: berbagi layar berhenti", { body: "Audio tetap direkam. Buka Notesy dan klik Bagikan ulang.", tag: "notesy-screen" });
   }
 }
 
@@ -359,7 +283,31 @@ function warnUnload(e: BeforeUnloadEvent) {
   e.preventDefault();
 }
 
+async function startNativeCapture(noteId: string, rec: MeetingRecorder, screen: boolean) {
+  const s = getSettings();
+  try {
+    nativeCapture = await NativeCapture.start({
+      noteId,
+      screen,
+      intervalMs: s.slideIntervalMs,
+      sensitivity: s.slideSensitivity,
+      clock: () => rec.elapsed(),
+      onSlide: () => patch({ slideCount: (live?.slideCount ?? 0) + 1 }),
+      onScreenEnded: () => {
+        logEvent("Rekam layar dihentikan dari Android");
+        patch({ warnings: addWarning(NATIVE_SCREEN_LOST) });
+      },
+    });
+    if (screen && !nativeCapture.screen) rec.warnings.push("Izin rekam layar tidak diberikan. Hanya mikrofon yang direkam.");
+  } catch (e) {
+    rec.warnings.push(`Rekaman di latar belakang tidak aktif: ${errorMessage(e)}. Biarkan Notesy tetap terbuka selama rapat.`);
+  }
+}
+
+const NATIVE_SCREEN_LOST = "Rekam layar dihentikan. Mikrofon tetap merekam; slide berikutnya tidak tertangkap otomatis.";
+
 export function pauseRecording() {
+  void nativeCapture?.pause();
   recorder?.pause();
   liveStt?.pause();
   if (watcher) watcher.paused = true;
@@ -367,6 +315,7 @@ export function pauseRecording() {
 }
 
 export function resumeRecording() {
+  void nativeCapture?.resume();
   recorder?.resume();
   liveStt?.resume();
   if (watcher) watcher.paused = false;
@@ -385,8 +334,8 @@ export function setAutoSlides(on: boolean) {
 }
 
 export async function captureSlideNow() {
-  if (!watcher)
-    throw new Error("Tangkapan layar hanya tersedia saat merekam layar.");
+  if (nativeCapture?.screen) return nativeCapture.captureNow();
+  if (!watcher) throw new Error("Tangkapan layar hanya tersedia saat merekam layar.");
   await watcher.captureNow();
 }
 
@@ -402,6 +351,8 @@ export async function stopRecording() {
   recorder = null;
   await speakerTracker?.finish();
   speakerTracker = null;
+  await nativeCapture?.stop();
+  nativeCapture = null;
   if (liveStt) {
     const stt = liveStt;
     liveStt = null;
@@ -412,10 +363,7 @@ export async function stopRecording() {
   void wakeLock?.release().catch(() => {});
   wakeLock = null;
   await updateNote(noteId, (n) => {
-    n.audio = [
-      ...n.audio.filter((a) => !tracks.some((t) => t.blobKey === a.blobKey)),
-      ...tracks,
-    ];
+    n.audio = [...n.audio.filter((a) => !tracks.some((t) => t.blobKey === a.blobKey)), ...tracks];
     n.durationMs = durationMs;
     n.status = { kind: "idle" };
   });
@@ -425,8 +373,7 @@ export async function stopRecording() {
 }
 
 /** Notes from before resumable transcription have no flag: a transcript there means it finished. */
-export const isTranscriptComplete = (n: Note) =>
-  n.transcriptComplete ?? n.transcript.length > 0;
+export const isTranscriptComplete = (n: Note) => n.transcriptComplete ?? n.transcript.length > 0;
 
 const jobs = new Map<string, AbortController>();
 export const isProcessing = (noteId: string) => jobs.has(noteId);
@@ -463,33 +410,18 @@ export async function processNote(noteId: string, opts: ProcessOptions = {}) {
     let note = await getNote(noteId);
     if (!note) return;
     const complete = isTranscriptComplete(note);
-    const doTranscribe =
-      opts.transcribe ?? (note.audio.length > 0 && !complete);
+    const doTranscribe = opts.transcribe ?? (note.audio.length > 0 && !complete);
     if (doTranscribe && note.audio.length) {
-      await setStatus(noteId, {
-        kind: "transcribing",
-        progress: 0,
-        detail: "Menyiapkan transkripsi…",
-      });
+      await setStatus(noteId, { kind: "transcribing", progress: 0, detail: "Menyiapkan transkripsi…" });
       const drain = liveDrains.get(noteId);
       if (drain) {
         const tick = setInterval(() => {
           const left = Math.round(drain.stt.backlogSec);
-          void setStatus(noteId, {
-            kind: "transcribing",
-            progress: 0,
-            detail: left
-              ? `Menyelesaikan transkrip live (sisa ${left} detik ucapan)…`
-              : "Menyimpan transkrip live…",
-          });
+          void setStatus(noteId, { kind: "transcribing", progress: 0, detail: left ? `Menyelesaikan transkrip live (sisa ${left} detik ucapan)…` : "Menyimpan transkrip live…" });
         }, 1000);
         await Promise.race([
           drain.done,
-          new Promise<never>((_, reject) =>
-            ctrl.signal.addEventListener("abort", () =>
-              reject(new DOMException("aborted", "AbortError")),
-            ),
-          ),
+          new Promise<never>((_, reject) => ctrl.signal.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")))),
         ]).finally(() => clearInterval(tick));
       }
       if (opts.fresh ?? complete) {
@@ -508,15 +440,13 @@ export async function processNote(noteId: string, opts: ProcessOptions = {}) {
           audio: note.audio,
           settings: s,
           dictionary: dictionaryStore.get(),
-          speakerFor: (ch: Channel) =>
-            ch === "mic" ? s.meLabel : s.othersLabel,
+          speakerFor: (ch: Channel) => (ch === "mic" ? s.meLabel : s.othersLabel),
           language: note.language,
           coverage: note.transcriptCoverage ?? {},
           onLanguage: (l) => writer.setLanguage(l),
           onWindow: (key, segments, range) => writer.add(key, segments, range),
           onProgress: (progress, detail) => {
-            if (ctrl.signal.aborted)
-              throw new DOMException("aborted", "AbortError");
+            if (ctrl.signal.aborted) throw new DOMException("aborted", "AbortError");
             if (Date.now() - last < 400 && progress < 1) return;
             last = Date.now();
             void setStatus(noteId, { kind: "transcribing", progress, detail });
@@ -526,65 +456,28 @@ export async function processNote(noteId: string, opts: ProcessOptions = {}) {
         await writer.flush();
       }
       await updateNote(noteId, (n) => {
-        n.transcript = assignSpeakers(
-          dropEcho([...n.transcript].sort((x, y) => x.start - y.start)),
-          n.speakerTimeline,
-          s.meLabel,
-        );
+        n.transcript = assignSpeakers(dropEcho([...n.transcript].sort((x, y) => x.start - y.start)), n.speakerTimeline, s.meLabel);
         n.transcriptComplete = true;
       });
     }
     note = (await getNote(noteId))!;
-    const wantSummary =
-      opts.summarize ?? (s.autoSummarize && note.summaries.length === 0);
-    if (
-      wantSummary &&
-      aiConfigured(s) &&
-      (note.transcript.length || note.memo.trim())
-    ) {
+    const wantSummary = opts.summarize ?? (s.autoSummarize && note.summaries.length === 0);
+    if (wantSummary && aiConfigured(s) && (note.transcript.length || note.memo.trim())) {
       if (s.describeSlides) {
-        await setStatus(noteId, {
-          kind: "describing",
-          progress: 0,
-          detail: "AI membaca tangkapan layar…",
-        });
-        await describeSlides(
-          noteId,
-          (p) =>
-            void setStatus(noteId, {
-              kind: "describing",
-              progress: p,
-              detail: "AI membaca tangkapan layar…",
-            }),
-          ctrl.signal,
-        ).catch((e) => {
-          if (ctrl.signal.aborted) throw e;
-          console.warn("describe slides failed", e);
-        });
+        await setStatus(noteId, { kind: "describing", progress: 0, detail: "AI membaca tangkapan layar…" });
+        await describeSlides(noteId, (p) => void setStatus(noteId, { kind: "describing", progress: p, detail: "AI membaca tangkapan layar…" }), ctrl.signal).catch(
+          (e) => {
+            if (ctrl.signal.aborted) throw e;
+            console.warn("describe slides failed", e);
+          },
+        );
       }
-      await setStatus(noteId, {
-        kind: "summarizing",
-        detail: "AI menyusun ringkasan…",
-      });
-      await generateSummary(
-        noteId,
-        opts.templateId ?? s.defaultTemplateId,
-        undefined,
-        ctrl.signal,
-      );
+      await setStatus(noteId, { kind: "summarizing", detail: "AI menyusun ringkasan…" });
+      await generateSummary(noteId, opts.templateId ?? s.defaultTemplateId, undefined, ctrl.signal);
     }
     note = (await getNote(noteId))!;
-    if (
-      opts.summarize !== false &&
-      aiConfigured(s) &&
-      !note.mom?.itemsEdited &&
-      (doTranscribe || !note.mom?.items.length) &&
-      (note.transcript.length || note.memo.trim())
-    ) {
-      await setStatus(noteId, {
-        kind: "summarizing",
-        detail: "AI menyusun poin pembahasan MoM…",
-      });
+    if (opts.summarize !== false && aiConfigured(s) && !note.mom?.itemsEdited && (doTranscribe || !note.mom?.items.length) && (note.transcript.length || note.memo.trim())) {
+      await setStatus(noteId, { kind: "summarizing", detail: "AI menyusun poin pembahasan MoM…" });
       await generateMomItems(noteId, ctrl.signal).catch((e) => {
         if (ctrl.signal.aborted) throw e;
         console.warn("MoM key points failed", e);
@@ -592,13 +485,8 @@ export async function processNote(noteId: string, opts: ProcessOptions = {}) {
     }
     await setStatus(noteId, { kind: "idle" });
   } catch (e) {
-    const aborted =
-      ctrl.signal.aborted ||
-      (e instanceof DOMException && e.name === "AbortError");
-    await setStatus(
-      noteId,
-      aborted ? { kind: "idle" } : { kind: "error", message: errorMessage(e) },
-    );
+    const aborted = ctrl.signal.aborted || (e instanceof DOMException && e.name === "AbortError");
+    await setStatus(noteId, aborted ? { kind: "idle" } : { kind: "error", message: errorMessage(e) });
   } finally {
     jobs.delete(noteId);
     jobDone.forEach((f) => f());
@@ -606,21 +494,10 @@ export async function processNote(noteId: string, opts: ProcessOptions = {}) {
 }
 
 export async function importAudioFile(file: File) {
-  const note = newNote({
-    title: file.name.replace(/\.[^.]+$/, ""),
-    titleIsAuto: true,
-    source: "import",
-  });
+  const note = newNote({ title: file.name.replace(/\.[^.]+$/, ""), titleIsAuto: true, source: "import" });
   const blobKey = `audio:${note.id}:mix`;
   await putBlob(blobKey, file);
-  note.audio = [
-    {
-      channel: "mix",
-      blobKey,
-      mime: file.type || "audio/webm",
-      bytes: file.size,
-    },
-  ];
+  note.audio = [{ channel: "mix", blobKey, mime: file.type || "audio/webm", bytes: file.size }];
   note.durationMs = await mediaDuration(file);
   await putNote(note);
   void processNote(note.id);
@@ -663,40 +540,19 @@ export async function recoverInterrupted() {
   const mime = pickMime() || "audio/webm";
   const elsewhere = await notesRecordingElsewhere();
   for (const n of notes) {
-    if (
-      n.status.kind === "recording" ||
-      sessions.some((k) => k.startsWith(`${n.id}:`))
-    ) {
+    if (n.status.kind === "recording" || sessions.some((k) => k.startsWith(`${n.id}:`))) {
       if (live?.noteId === n.id || elsewhere.has(n.id)) continue;
-      const parts = sessions
-        .filter((k) => parseSessionKey(k)?.noteId === n.id)
-        .map((session) => ({ session, mime }));
+      const parts = sessions.filter((k) => parseSessionKey(k)?.noteId === n.id).map((session) => ({ session, mime }));
       const tracks = await finalizeTracks(parts);
       await updateNote(n.id, (x) => {
-        if (tracks.length)
-          x.audio = [
-            ...x.audio.filter(
-              (a) => !tracks.some((t) => t.blobKey === a.blobKey),
-            ),
-            ...tracks,
-          ];
+        if (tracks.length) x.audio = [...x.audio.filter((a) => !tracks.some((t) => t.blobKey === a.blobKey)), ...tracks];
         x.status = tracks.length
-          ? {
-              kind: "error",
-              message:
-                "Rekaman terputus (tab ditutup). Audio yang sempat tersimpan sudah dipulihkan — klik Transkrip ulang.",
-            }
+          ? { kind: "error", message: "Rekaman terputus (tab ditutup). Audio yang sempat tersimpan sudah dipulihkan — klik Transkrip ulang." }
           : { kind: "idle" };
       });
-    } else if (
-      ["transcribing", "describing", "summarizing"].includes(n.status.kind)
-    ) {
+    } else if (["transcribing", "describing", "summarizing"].includes(n.status.kind)) {
       await updateNote(n.id, (x) => {
-        x.status = {
-          kind: "error",
-          message:
-            "Proses terhenti karena aplikasi ditutup. Klik Proses ulang untuk melanjutkan dari bagian terakhir.",
-        };
+        x.status = { kind: "error", message: "Proses terhenti karena aplikasi ditutup. Klik Proses ulang untuk melanjutkan dari bagian terakhir." };
       });
     }
   }

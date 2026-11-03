@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { ChevronDown, Mic, MonitorUp, Upload } from "lucide-react";
 import { startRecording, importAudioFile } from "../lib/session";
-import { canCaptureScreen } from "../lib/platform";
+import { TARGET, canCaptureScreen } from "../lib/platform";
 import { toast, toastError } from "../lib/toast";
 import type { CaptureMode } from "../lib/recorder";
 import type { Mom } from "../lib/types";
@@ -90,8 +90,17 @@ export function RecordButton({ noteId, onStarted, variant = "primary", label }: 
             <button role="menuitem" onClick={() => askInfo("screen")}>
               <MonitorUp size={16} />
               <div>
-                <b>Layar + audio rapat</b>
-                <small>Untuk Teams/Zoom desktop atau tab. Centang “bagikan audio sistem”.</small>
+                {TARGET === "android" ? (
+                  <>
+                    <b>Layar + mikrofon</b>
+                    <small>Slide dari Meet/Teams/presentasi di HP tertangkap otomatis. Suara lewat mikrofon: nyalakan speaker, jangan pakai earphone.</small>
+                  </>
+                ) : (
+                  <>
+                    <b>Layar + audio rapat</b>
+                    <small>Untuk Teams/Zoom desktop atau tab. Centang “bagikan audio sistem”.</small>
+                  </>
+                )}
               </div>
             </button>
           )}
