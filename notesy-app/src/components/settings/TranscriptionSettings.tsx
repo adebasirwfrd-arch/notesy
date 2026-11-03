@@ -57,7 +57,12 @@ export function TranscriptionSettings() {
       {s.sttEngine === "browser" ? (
         <>
           <Card tone="info">
-            Audio tidak pernah meninggalkan perangkat. Model diunduh sekali dari Hugging Face lalu disimpan di browser.
+            {s.sttCloud === "off"
+              ? "Audio tidak pernah meninggalkan perangkat."
+              : s.sttCloud === "always"
+                ? "Audio dikirim ke Groq lewat server Notesy untuk ditranskrip."
+                : "Audio diproses di perangkat; hanya dikirim ke Groq lewat server Notesy bila laptop tertinggal atau saat memproses rekaman setelah rapat."}{" "}
+            Model lokal diunduh sekali dari Hugging Face lalu disimpan di browser.
             {!hasWebGPU && " Browser ini tidak mendukung WebGPU, jadi transkripsi memakai CPU (lebih lambat)."}
           </Card>
           <Field label="Model">
