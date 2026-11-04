@@ -10,7 +10,7 @@ import { NativeCapture, hasNativeCapture } from "./native-capture";
 import { TranscriptWriter } from "./stt/writer";
 import { aiConfigured, describeSlides, generateMomItems, generateSummary } from "./ai";
 import type { Channel, Note, NoteStatus } from "./types";
-import { errorMessage, formatDate, formatTime, uid } from "./util";
+import { errorMessage, formatDate, formatTime, uid, within } from "./util";
 
 export interface LiveSession {
   noteId: string;
@@ -347,29 +347,45 @@ export async function stopRecording() {
   watcher?.stop();
   watcher = null;
   const rec = recorder;
-  const { tracks, durationMs } = await rec.stop();
+  let saved: Awaited<ReturnType<MeetingRecorder["stop"]>> | null = null;
+  let failure = "";
+  try {
+    saved = await rec.stop();
+  } catch (e) {
+    failure = errorMessage(e);
+  }
   recorder = null;
-  await speakerTracker?.finish();
+  // Everything after the audio is saved is best effort: none of it may keep the recording stuck on "Menyimpan…".
+  await within(speakerTracker?.finish(), 5000);
   speakerTracker = null;
-  await nativeCapture?.stop();
+  await within(nativeCapture?.stop(), 5000);
   nativeCapture = null;
   if (liveStt) {
     const stt = liveStt;
     liveStt = null;
-    const done = stt.finish().finally(() => liveDrains.delete(noteId));
+    const done = stt.finish().catch(() => {}).finally(() => liveDrains.delete(noteId));
     liveDrains.set(noteId, { stt, done });
   }
   window.removeEventListener("beforeunload", warnUnload);
   void wakeLock?.release().catch(() => {});
   wakeLock = null;
-  await updateNote(noteId, (n) => {
-    n.audio = [...n.audio.filter((a) => !tracks.some((t) => t.blobKey === a.blobKey)), ...tracks];
-    n.durationMs = durationMs;
-    n.status = { kind: "idle" };
-  });
-  dropRecordingLock();
-  void processNote(noteId);
-  set(null);
+  try {
+    await updateNote(noteId, (n) => {
+      if (saved) {
+        const { tracks, durationMs } = saved;
+        n.audio = [...n.audio.filter((a) => !tracks.some((t) => t.blobKey === a.blobKey)), ...tracks];
+        n.durationMs = durationMs;
+        n.status = { kind: "idle" };
+      } else {
+        // The chunk journal is untouched, so reopening Notesy rebuilds the audio from it.
+        n.status = { kind: "error", message: `Gagal menyimpan rekaman (${failure}). Audio masih aman di jurnal; muat ulang Notesy untuk memulihkannya.` };
+      }
+    });
+  } finally {
+    dropRecordingLock();
+    set(null);
+  }
+  if (saved) void processNote(noteId);
 }
 
 /** Notes from before resumable transcription have no flag: a transcript there means it finished. */

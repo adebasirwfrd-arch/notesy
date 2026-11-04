@@ -3,6 +3,10 @@ export const uid = (prefix = "") =>
 
 export const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
+/** Waits for `p`, but gives up after `ms` so a browser API that never settles cannot wedge the caller. */
+export const within = <T>(p: Promise<T> | undefined, ms: number): Promise<T | undefined> =>
+  Promise.race([Promise.resolve(p).catch(() => undefined), sleep(ms).then(() => undefined)]);
+
 export function formatClock(ms: number) {
   const s = Math.max(0, Math.floor(ms / 1000));
   const h = Math.floor(s / 3600);

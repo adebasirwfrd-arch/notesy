@@ -129,12 +129,15 @@ export async function appendChunk(session: string, seq: number, blob: Blob) {
   await (await db()).put("chunks", { session, seq, blob });
 }
 
-export async function takeChunks(session: string, mime: string): Promise<Blob | null> {
+/** Joins a session's journaled chunks into `blobKey`, deleting the chunks only once the joined audio is stored. */
+export async function commitChunks(session: string, mime: string, blobKey: string): Promise<Blob | null> {
   const d = await db();
   const rows = await d.getAllFromIndex("chunks", "bySession", session);
   if (!rows.length) return null;
   rows.sort((a, b) => a.seq - b.seq);
   const blob = new Blob(rows.map((r) => r.blob), { type: mime });
+  if (!blob.size) return null;
+  await d.put("blobs", blob, blobKey);
   const tx = d.transaction("chunks", "readwrite");
   for (const r of rows) tx.store.delete([r.session, r.seq]);
   await tx.done;

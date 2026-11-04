@@ -1,5 +1,6 @@
-import { appendChunk, putBlob, takeChunks } from "./db";
+import { appendChunk, commitChunks } from "./db";
 import type { AudioTrack, Channel } from "./types";
+import { within } from "./util";
 
 export type CaptureMode = "screen" | "mic";
 
@@ -62,12 +63,24 @@ class ChannelRecorder {
   resume() {
     if (this.rec.state === "paused") this.rec.resume();
   }
-  stop(): Promise<void> {
-    return new Promise((resolve) => {
-      if (this.rec.state === "inactive") return void Promise.all(this.pending).then(() => resolve());
-      this.rec.onstop = () => Promise.all(this.pending).then(() => resolve());
-      this.rec.stop();
-    });
+  /**
+   * Never rejects and never hangs: a failed chunk write or a MediaRecorder that never fires "stop" (its source track died)
+   * must not block saving the audio that is already in the journal.
+   */
+  async stop(): Promise<void> {
+    if (this.rec.state !== "inactive") {
+      await new Promise<void>((resolve) => {
+        const t = setTimeout(resolve, 5000);
+        this.rec.onstop = () => (clearTimeout(t), resolve());
+        try {
+          this.rec.stop();
+        } catch {
+          clearTimeout(t);
+          resolve();
+        }
+      });
+    }
+    await within(Promise.allSettled(this.pending), 15000);
   }
 }
 
@@ -353,7 +366,7 @@ export class MeetingRecorder {
     if (this.micRetry) clearTimeout(this.micRetry);
     await Promise.all(this.allRecorders().map((r) => r.stop()));
     this.stopTracks();
-    await this.ctx?.close().catch(() => {});
+    await within(this.ctx?.close(), 2000);
     const { noteId } = this.opts;
     const tracks = await finalizeTracks([
       ...(Object.entries(this.recorders) as [Channel | "mix", ChannelRecorder][]).map(([ch, r]) => ({ session: sessionKey(noteId, ch), mime: r.mime })),
@@ -369,11 +382,10 @@ export async function finalizeTracks(parts: { session: string; mime: string }[])
   for (const { session, mime } of parts) {
     const parsed = parseSessionKey(session);
     if (!parsed) continue;
-    const blob = await takeChunks(session, mime);
-    if (!blob || !blob.size) continue;
     // Unique per finalize: a second finalize of the same session must never overwrite audio saved by the first.
     const blobKey = `audio:${session}@${Date.now().toString(36)}`;
-    await putBlob(blobKey, blob);
+    const blob = await commitChunks(session, mime, blobKey);
+    if (!blob) continue;
     tracks.push({ channel: parsed.channel, blobKey, mime: blob.type || mime, bytes: blob.size, ...(parsed.offsetMs ? { offsetMs: parsed.offsetMs } : {}) });
   }
   return tracks;
