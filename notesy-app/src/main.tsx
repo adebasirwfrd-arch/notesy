@@ -6,12 +6,27 @@ import { recoverInterrupted } from "./lib/session";
 import { startUpdateChecks } from "./lib/update";
 import "./styles.css";
 
-/** A setup link `…/#pass=<passcode>` stores the passcode on this device; the hash never reaches the server. */
+const LINK_MODELS: Record<string, string> = {
+  turbo: "onnx-community/whisper-large-v3-turbo",
+  small: "onnx-community/whisper-small",
+  base: "onnx-community/whisper-base",
+};
+
+/** A setup link `…/#pass=<passcode>&model=turbo&lang=en` configures this device; the hash never reaches the server. */
 async function takePasscodeFromLink() {
-  const pass = new URLSearchParams(location.hash.slice(1)).get("pass")?.trim();
-  if (!pass) return;
+  const q = new URLSearchParams(location.hash.slice(1));
+  const pass = q.get("pass")?.trim();
+  const model = LINK_MODELS[q.get("model") ?? ""];
+  const lang = q.get("lang")?.trim();
+  if (!pass && !model && !lang) return;
   history.replaceState(null, "", location.pathname + location.search);
-  await settingsStore.set({ ...settingsStore.get(), cloudPasscode: pass });
+  const s = settingsStore.get();
+  await settingsStore.set({
+    ...s,
+    ...(pass ? { cloudPasscode: pass } : {}),
+    ...(model ? { whisperModel: model, sttEngine: "browser" as const, liveTranscribe: true } : {}),
+    ...(lang ? { sttLanguage: lang } : {}),
+  });
 }
 
 storesReady.then(async () => {

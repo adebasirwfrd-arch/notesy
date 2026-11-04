@@ -43,7 +43,7 @@ export default defineConfig(({ mode }) => ({
   server: {
     port: 5317,
     proxy: {
-      "/api/attendance": {
+      "^/api/(attendance|transcribe|mom-template)": {
         target: process.env.NOTESY_API_TARGET ?? "https://notesy-three.vercel.app",
         changeOrigin: true,
         headers: process.env.NOTESY_API_BYPASS ? { "x-vercel-protection-bypass": process.env.NOTESY_API_BYPASS } : {},
