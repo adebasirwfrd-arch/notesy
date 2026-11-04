@@ -10,7 +10,7 @@ import { repairHeaderlessWebm } from "./webm";
 export const WHISPER_MODELS = [
   { id: "onnx-community/whisper-base", name: "Whisper Base", size: "~80 MB", note: "Cepat, akurasi cukup" },
   { id: "onnx-community/whisper-small", name: "Whisper Small", size: "~250 MB", note: "Seimbang (disarankan)" },
-  { id: "onnx-community/whisper-large-v3-turbo", name: "Whisper Large v3 Turbo", size: "~800 MB", note: "Paling akurat, butuh WebGPU" },
+  { id: "onnx-community/whisper-large-v3-turbo", name: "Whisper Large v3 Turbo", size: "~1,6 GB", note: "Paling akurat, butuh WebGPU" },
 ];
 
 export const STT_LANGUAGES = [

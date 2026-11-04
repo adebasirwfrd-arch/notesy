@@ -26,7 +26,9 @@ async function load({ model, device, ortBase }: LoadMsg) {
   await asr?.dispose();
   asr = null;
   const files = new Map<string, { loaded: number; total: number }>();
-  const dtype = device === "webgpu" ? { encoder_model: "fp32", decoder_model_merged: "q4" } : "q8";
+  // The fp32 encoder of the large models ships as a >2 GB external-data file that the browser runtime cannot load.
+  const f16 = device === "webgpu" && !!(await (navigator as Navigator & { gpu?: GPU }).gpu?.requestAdapter())?.features.has("shader-f16");
+  const dtype = device === "webgpu" ? { encoder_model: f16 ? "fp16" : "q8", decoder_model_merged: "q4" } : "q8";
   asr = (await pipeline("automatic-speech-recognition", model, {
     device,
     dtype: dtype as never,
