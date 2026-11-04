@@ -5,6 +5,7 @@ import { SettingsView } from "./components/settings/SettingsView";
 import { Home } from "./components/Home";
 import { Toasts } from "./components/Toasts";
 import { PipBar } from "./components/PipBar";
+import { GpuTest } from "./components/GpuTest";
 import { NARROW, useHashRoute, useMediaQuery } from "./lib/hooks";
 import { useLiveSession } from "./lib/session";
 
@@ -28,7 +29,9 @@ export function App() {
       <Sidebar activeId={view === "note" ? id : undefined} onNavigate={go} onClose={() => setSidebarOpen(false)} />
       {narrow && sidebarOpen && <div className="scrim" onClick={() => setSidebarOpen(false)} />}
       <main className="main">
-        {view === "note" && id ? (
+        {view === "gputest" ? (
+          <GpuTest />
+        ) : view === "note" && id ? (
           <NoteView key={id} noteId={id} onNavigate={go} onToggleSidebar={() => setSidebarOpen((v) => !v)} />
         ) : view === "settings" ? (
           <SettingsView section={id} onNavigate={go} onToggleSidebar={() => setSidebarOpen((v) => !v)} />
