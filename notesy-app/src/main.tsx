@@ -27,6 +27,8 @@ async function takePasscodeFromLink() {
     ...(model ? { whisperModel: model, sttEngine: "browser" as const, liveTranscribe: true } : {}),
     ...(lang ? { sttLanguage: lang } : {}),
   });
+  // Start the model download now so it is ready before the first recording.
+  if (model) void import("./lib/stt").then(({ prepareWhisper }) => prepareWhisper(settingsStore.get())).catch((e) => console.warn("preload failed", e));
 }
 
 storesReady.then(async () => {

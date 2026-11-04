@@ -74,7 +74,13 @@ function createKvStore<T>(key: string, fallback: T, normalize: (v: T | undefined
   };
 }
 
-export const settingsStore = createKvStore<Settings>("settings", DEFAULT_SETTINGS, (v) => ({ ...DEFAULT_SETTINGS, ...(v ?? {}) }));
+/** Local dev only: `VITE_DEV_CURSOR_KEY` fills an empty Cursor key so a fresh localhost profile can summarize right away. */
+const devCursorKey = import.meta.env.DEV ? ((import.meta.env.VITE_DEV_CURSOR_KEY as string | undefined) ?? "") : "";
+
+export const settingsStore = createKvStore<Settings>("settings", DEFAULT_SETTINGS, (v) => {
+  const s = { ...DEFAULT_SETTINGS, ...(v ?? {}) };
+  return devCursorKey && !s.cursorApiKey ? { ...s, aiProvider: "cursor", cursorApiKey: devCursorKey } : s;
+});
 export const templatesStore = createKvStore<Template[]>("templates", []);
 export const dictionaryStore = createKvStore<DictionaryEntry[]>("dictionary", []);
 
